@@ -1,2 +1,2 @@
-# apk-o-llama-
+# apk-o-llama
 Beta testing is in progress. Coming soon...
