@@ -269,6 +269,7 @@ For users who want to run APK-o-Llama from the command line without Burp Suite, 
 #### Usage Examples
 
 **Single APK Analysis**
+
     ```bash
     # Analyze a decompiled APK directory
     java -jar apk-o-llama-v1.1.0-standalone.jar ./decompiled-apk-folder/
