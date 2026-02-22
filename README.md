@@ -266,8 +266,9 @@ For users who want to run APK-o-Llama from the command line without Burp Suite, 
    alias apk-ollama='java -jar /path/to/apk-o-llama-v1.1.0-standalone.jar'
    ```
 
-4. **Usage Examples**
-   **Single APK Analysis**
+#### Usage Examples
+
+**Single APK Analysis**
     ```bash
     # Analyze a decompiled APK directory
     java -jar apk-o-llama-v1.1.0-standalone.jar ./decompiled-apk-folder/
@@ -276,7 +277,7 @@ For users who want to run APK-o-Llama from the command line without Burp Suite, 
     java -jar apk-o-llama-v1.1.0-standalone.jar ./decompiled-apk-folder/ >> results.json
     ```
 
-  **Batch Processing Multiple APKs**
+**Batch Processing Multiple APKs**
   ```bash
   # Process multiple decompiled APK directories
   for apk in ./decompiled/*/; do
@@ -284,7 +285,7 @@ For users who want to run APK-o-Llama from the command line without Burp Suite, 
   done
   ```
 
-  **CI/CD Integration (GitHub Actions Example)**
+**CI/CD Integration (GitHub Actions Example)**
   ```
   - name: Run APK-o-Llama Security Scan
     run: |
