@@ -34,10 +34,11 @@
 
 ## Overview
 
-**APK-o-Llama** is a professional-grade Burp Suite extension that combines static APK security analysis with local Ollama LLM capabilities. Designed specifically for mobile application security testers and Android bug bounty hunters, this tool transforms traditional static analysis by adding AI-powered vulnerability assessment and report generation directly within Burp Suite's interface.
+**APK-o-Llama** is a professional-grade Burp Suite extension that combines static APK security analysis with enhanced analyzers, comprehensive configuration, a professional UI and your local Ollama LLM capabilities. Designed specifically for mobile application security testers and Android bug bounty hunters, this tool transforms traditional static analysis by adding AI-powered vulnerability assessment and report generation directly within Burp Suite's interface.
 
 ## Key Highlights
 
+- **6 Specialized Analyzers** — Comprehensive scanning for 70+ security issues
 - **Comprehensive APK static analysis** — Decompiled APK scanning for 50+ security issues
 - **Local LLM processing** via Ollama — No data leaves your machine, zero API costs
 - **AI-generated vulnerability reports** — Professional bug bounty-style write-ups for each finding
@@ -46,6 +47,8 @@
 - **Click-to-retry interface** — One-click retry for failed or timed-out AI requests
 - **Severity-based color coding** — CRITICAL 🔴, HIGH 🟠, MEDIUM 🟡, LOW 🟢
 - **Confidence scoring** — Machine-learning based confidence metrics (0-100%)
+- **Persistent Configuration** — Save your settings to file between sessions
+- **True AI conversation** — Feel the true AI conversation with Auto context-storing to your local machine up to 20 chats.
 
 ## Deep Burp Suite Integration
 
@@ -53,8 +56,11 @@ The extension integrates seamlessly into Burp Suite's ecosystem:
 
 - **Dedicated "APK-o-Llama" Tab**: Central dashboard for APK analysis and AI results
 - **Split-pane Interface**: Left panel for finding details, right panel for AI-generated reports
+- **Configuration Tab** — Full control over Ollama settings, scan parameters, and system status
+- **AI Console Tab** — Standalone AI conversation with context retention
 - **Sortable Findings Table**: Multi-column sorting by severity, confidence, and AI status
 - **Context-Aware UI**: Dynamic button states based on selection and AI request status
+- **Progress Tracking** — Real-time progress bar showing "AI Analysis: 3/10 (Failed: 1)"
 
 ## Security Analysis Engine
 
@@ -75,12 +81,13 @@ The extension integrates seamlessly into Burp Suite's ecosystem:
 - OpenAI/ChatGPT API Keys, GitHub Tokens
 - Generic passwords and API keys in code
 - High-entropy strings near security keywords
+- Expanded keyword list (70+ security terms)
 
 **Cryptographic Issues** (HIGH/MEDIUM):
 - DES, RC4, MD5, SHA1 usage
 - ECB encryption mode
 - Hardcoded keys and IVs
-- Insecure random number generation
+- Insecure random number generation (`new random`)
 
 **Manifest Misconfigurations** (CRITICAL/HIGH):
 - Debuggable applications in production
@@ -88,6 +95,9 @@ The extension integrates seamlessly into Burp Suite's ecosystem:
 - Cleartext traffic allowed
 - Backup enabled exposing sensitive data
 - Task hijacking vulnerabilities
+- Dangerous permission analysis (20+ permissions)
+- Content provider security checks
+- WebView security misconfigurations
 
 **Binary Analysis** (CRITICAL/MEDIUM):
 - Embedded RSA private keys
@@ -116,11 +126,16 @@ The extension integrates seamlessly into Burp Suite's ecosystem:
 │  │  │   Queue     │  │   Retry     │  │   Status    │          │  │
 │  │  │  Manager    │  │  Scheduler  │  │   Monitor   │          │  │
 │  │  └─────────────┘  └─────────────┘  └─────────────┘          │  │
+│  │                                                             │  │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐          │  │
+│  │  │ Cancellation│  │ Rate Limit  │  │   Stale     │          │  │
+│  │  │   Handler   │  │   Handler   │  │  Request    │          │  │
+│  │  └─────────────┘  └─────────────┘  └─────────────┘          │  │
 │  └─────────────────────────────────────────────────────────────┘  │
 │                                                                   │
 │  ┌─────────────────────────────────────────────────────────────┐  │
 │  │                    OllamaClient                             │  │
-│  │    HTTP client with timeout/retry handling                  │  │
+│  │    HTTP client with timeout/retry handling + Cancellation   │  │
 │  └─────────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────┬─────────────────────────────────┘
                                   │
@@ -143,24 +158,30 @@ The extension integrates seamlessly into Burp Suite's ecosystem:
 
 ## Model Configuration
 
-APK-o-Llama is pre-configured with specialized Ollama model optimized for security analysis:
+APK-o-Llama has a persistent configuration system with UI management with specialized Ollama model optimized for security analysis:
 
 ### Default Model
 - **Model**: `qwen2.5-coder:7b` - Specialized for code analysis and technical writing
 - **Custom Model Support**: Modify `OllamaClient.java` to use any Ollama-compatible model
 
 ### Configuration Options
-| Parameter | Default | Range |
-|-----------|---------|-------|
-| **Temperature** | 0.7 | 0.0 - 2.0 |
-| **Max Tokens** | 2000 | 128 - 4096 |
-| **Connect Timeout** | 17,500ms | Configurable |
-| **Read Timeout** | 52,500ms | Configurable |
-| **Max Retries** | 3 | 0 - 10 |
-| **Concurrent Requests** | 1 | 1 - 10 (modifiable) |
+| Parameter | Default | Range | Persistence |
+|-----------|---------|-------|-------------|
+| **Ollama Endpoint** | `http://localhost:11434` | Any URL | ✅ Saved |
+| **Model Name** | `qwen2.5-coder:7b` | Any Ollama model | ✅ Saved |
+| **Connect Timeout** | 17,500ms | Configurable | ✅ Saved |
+| **Read Timeout** | 52,500ms | Configurable | ✅ Saved |
+| **Max Tokens** | 2000 | 128 - 4096 | ✅ Saved |
+| **Entropy Threshold** | 4.5 | 0.0 - 8.0 | ✅ Saved |
+| **Max File Size** | 10 MB | Configurable | ✅ Saved |
+| **Scan Binary Files** | true | Boolean | ✅ Saved |
+| **Entropy Detection** | true | Boolean | ✅ Saved |
+| **Debug Mode** | false | Boolean | ✅ Saved |
 
 ### Model Compatibility
 - Supports any Ollama-compatible model
+- Test connection button with model list fetch
+- Available models displayed in Configuration tab
 - Automatic retry with exponential backoff
 - Rate limit and timeout handling
 - Cold start detection with extended timeouts
@@ -235,6 +256,8 @@ For custom modifications and development:
 - 🔐 **No API Keys Required**: Free local LLM, no monthly subscriptions
 - 📁 **Offline Capable**: Works completely offline after model download
 - 🛡️ **Enterprise-Ready**: Safe for sensitive/confidential APK analysis
+- ⚠️ **Configuration persistence** with local file storage
+- ❤️ **Request cancellation**: to prevent data leaks from stuck processes
 
 ### Analysis Capabilities
 - 📦 **APK Directory Scanning**: Process decompiled APK folder structures
@@ -253,6 +276,9 @@ For custom modifications and development:
 - 🔄 **Smart Retry**: One-click retry for failed/timeout requests
 - 📊 **Progress Tracking**: Visual feedback for AI analysis progress
 - 🎨 **Formatted Display**: Clean text formatting with proper line wrapping
+- 🤖 **AI Console**: for custom queries with conversation history
+- 😺 **Cancellation**: Cancel in-progress AI requests
+- 🔥 **Token**: usage estimation
 
 ### Performance Features
 - ⚙️ **Thread-Safe Architecture**: ConcurrentHashMap, AtomicInteger for thread safety
@@ -300,8 +326,17 @@ For custom modifications and development:
 4. **Retry Failed Requests**:
    - Failed/timeout requests show red "Click to Retry"
    - Single-click to retry with exponential backoff
+    
 5. **Dedicated AI Console**
    - A dedicated separate AI Console for AI conversation.
+   - Switch to "AI Console" tab for custom queries
+   - Ask questions about findings or general security topics
+   - Cancel long-running console requests
+   - Clear response area with confirmation
+
+6. **Cancel In-Progress Requests**:
+   - Select findings with Pending/In Progress status
+   - Click "Cancel" to abort analysis
 
 ### Multi-Finding Batch Processing
 - Select 10+ findings simultaneously
@@ -309,6 +344,23 @@ For custom modifications and development:
 - Track progress via progress bar: `AI Analysis: 3/10 (Failed: 1)`
 - Retry all failed with one click
 - Cancel in-progress requests
+
+### Configuration Management
+1. **Navigate to Configuration Tab**
+2. **Configure Ollama Settings**:
+   - Set endpoint, model, timeouts
+   - Click "Test Connection" to verify and fetch available models
+3. **Adjust Scan Parameters**:
+   - Entropy threshold, max file size
+   - Toggle binary scanning and entropy detection
+4. **Save Configuration**:
+   - Settings persist in `apkollama.config` file
+   - Automatically loaded on next startup
+
+### Version Checking
+- Automatic background check on startup
+- "New Releases" button turns **yellow** when update available
+- Click to view latest version and open GitHub releases page
 
 ### Result Visualization
 | Severity | Color | Icon | Description |
@@ -325,9 +377,27 @@ For custom modifications and development:
 ██████████ 90%+ - Confirmed
 ```
 
+### AI Status Indicators (v1.1.0 NEW)
+
+| Status | Color | Behavior |
+|--------|-------|----------|
+| **Not Requested** | Default | - |
+| **Pending** | White | Waiting in queue |
+| **In Progress** | White | Processing |
+| **Completed** | White | ✓ Done |
+| **Failed** | 🔴 Red | Click to retry |
+| **Timeout** | 🔴 Red | Click to retry |
+| **Rate Limited** | 🔴 Red | Click to retry |
+| **Cancelled** | Gray | User cancelled |
+
 ## Screenshots
-<img width="1470" height="923" alt="Screenshot 2026-02-12 at 9 20 41GÇ»PM" src="https://github.com/user-attachments/assets/bf5a2661-0d10-4d85-a71b-e37ced63530f" />
-<img width="1469" height="923" alt="Screenshot 2026-02-12 at 9 22 58GÇ»PM" src="https://github.com/user-attachments/assets/acd77dbf-5543-41d1-a106-ff9fe6ee289f" />
+<img width="1470" height="921" alt="Screenshot 2026-02-21 at 8 53 31ΓÇ»PM" src="https://github.com/user-attachments/assets/dad15a17-0219-47b6-b943-be98595d0bf5" />
+<img width="1470" height="924" alt="Screenshot 2026-02-21 at 9 28 35ΓÇ»PM" src="https://github.com/user-attachments/assets/e8a3252e-b5fd-4d97-a434-8e29610bd909" />
+<img width="1470" height="925" alt="Screenshot 2026-02-21 at 8 54 04ΓÇ»PM" src="https://github.com/user-attachments/assets/16459a6e-6af9-480e-818d-006c9da631a3" />
+<img width="1470" height="888" alt="Screenshot 2026-02-21 at 9 07 12ΓÇ»PM" src="https://github.com/user-attachments/assets/cf945d69-d25a-47f2-a5c4-df4d7143574b" />
+<img width="1470" height="887" alt="Screenshot 2026-02-21 at 9 07 42ΓÇ»PM" src="https://github.com/user-attachments/assets/385a317e-8c39-48ae-b1ee-7b28d52d3d43" />
+<img width="1470" height="888" alt="Screenshot 2026-02-21 at 9 08 06ΓÇ»PM" src="https://github.com/user-attachments/assets/8344ef8f-abd0-4b0a-b94e-ddc3a80e8fbd" />
+
 
 ## Support Development
 
