@@ -17,6 +17,7 @@
   - [Prerequisites](#prerequisites)
   - [Method 1: Pre-compiled Installation](#method-1-pre-compiled-installation-recommended)
   - [Method 2: Custom Build Installation](#method-2-custom-build-installation)
+  - [Method 3: Standalone CLI Mode](#method-3-standalone-cli-mode)
 - [Key Features](#key-features)
   - [Security & Privacy](#security--privacy)
   - [Analysis Capabilities](#analysis-capabilities)
@@ -247,6 +248,52 @@ For custom modifications and development:
    ```
 
 4. **Install Custom Build**: Load generated JAR into Burp Suite
+
+### Method 3: Standalone CLI Mode
+
+For users who want to run APK-o-Llama from the command line without Burp Suite, or integrate it into automated CI/CD pipelines. [Note: NO AI in CLI]
+
+1. **Download the Standalone JAR** file from release page.
+
+2. **Make it executable** (optional)
+   ```bash
+   chmod +x apk-o-llama-v1.1.0-standalone.jar
+   ```
+
+3. **Create an alias for easy use** (optional)
+   ```bash
+   # Add to your .bashrc or .zshrc
+   alias apk-ollama='java -jar /path/to/apk-o-llama-v1.1.0-standalone.jar'
+   ```
+
+4. **Usage Examples**
+   **Single APK Analysis**
+    ```bash
+    # Analyze a decompiled APK directory
+    java -jar apk-o-llama-v1.1.0-standalone.jar ./decompiled-apk-folder/
+
+    # With custom output file
+    java -jar apk-o-llama-v1.1.0-standalone.jar ./decompiled-apk-folder/ >> results.json
+    ```
+
+  **Batch Processing Multiple APKs**
+  ```bash
+  # Process multiple decompiled APK directories
+  for apk in ./decompiled/*/; do
+    java -jar apk-o-llama-v1.1.0-standalone.jar "$apk"
+  done
+  ```
+
+  **CI/CD Integration (GitHub Actions Example)**
+  ```
+  - name: Run APK-o-Llama Security Scan
+    run: |
+      java -jar apk-o-llama-v1.1.0-standalone.jar scan ./app-decompiled/ \
+      if [ $? -ne 0 ]; then
+        echo "Security issues found!"
+        exit 1
+      fi
+  ```
 
 ## Key Features
 
