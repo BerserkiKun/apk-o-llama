@@ -3,7 +3,7 @@ package analyzers;
 import models.Finding;
 import models.Severity;
 import utils.EntropyCalculator;
-
+import models.Configuration;  
 import java.io.File;
 import java.nio.file.Files;
 import java.util.ArrayList;
@@ -11,10 +11,11 @@ import java.util.List;
 import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import models.Configuration;
 
 public class SecretScanner implements Analyzer {
     
-    private static final double ENTROPY_THRESHOLD = 4.5;
+    //private static final double ENTROPY_THRESHOLD = 4.5;
     private static final int MIN_SECRET_LENGTH = 16;
     
     private static final List<SecretPattern> PATTERNS = List.of(
@@ -93,7 +94,10 @@ public class SecretScanner implements Analyzer {
             }
         }
         
-        findings.addAll(detectHighEntropyStrings(lines, file.getAbsolutePath()));
+        // Only run entropy detection if enabled in config
+        if (Configuration.getInstance().isEntropyDetectionEnabled()) {
+            findings.addAll(detectHighEntropyStrings(lines, file.getAbsolutePath()));
+        }
         
         return findings;
     }
@@ -101,6 +105,9 @@ public class SecretScanner implements Analyzer {
     private List<Finding> detectHighEntropyStrings(String[] lines, String filePath) {
         List<Finding> findings = new ArrayList<>();
         
+        // Get threshold from configuration
+        double entropyThreshold = Configuration.getInstance().getEntropyThreshold();
+
         Pattern stringPattern = Pattern.compile("['\"]([A-Za-z0-9+/=]{" + MIN_SECRET_LENGTH + ",})['\"]");
         
         for (int i = 0; i < lines.length; i++) {
@@ -116,7 +123,7 @@ public class SecretScanner implements Analyzer {
             while (matcher.find()) {
                 String candidate = matcher.group(1);
                 
-                if (EntropyCalculator.isHighEntropy(candidate, ENTROPY_THRESHOLD)) {
+                if (EntropyCalculator.isHighEntropy(candidate, Configuration.getInstance().getEntropyThreshold())) {
                     
                     boolean nearKeyword = false;
                     String context = getContext(lines, i, 3).toLowerCase(); // Convert to lowercase

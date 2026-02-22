@@ -12,7 +12,7 @@ import rules.RuleEngine;
 import scanner.FileScanner;
 import scanner.FileType;
 import java.util.concurrent.ExecutionException;
-
+import models.Configuration;
 import javax.swing.*;
 import javax.swing.table.DefaultTableCellRenderer;
 import javax.swing.table.DefaultTableModel;
@@ -23,10 +23,29 @@ import java.awt.event.MouseEvent;
 import java.io.File;
 import java.util.*;
 import java.util.List;
-
+import ai.ConversationHistory;
 import javax.swing.table.TableRowSorter;
-import java.util.Comparator;
+
 import models.Severity;  
+import java.util.concurrent.CancellationException;
+import java.net.URL;
+import java.net.URI;
+import java.net.HttpURLConnection;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
+import java.util.List;
+import models.VersionManager;
+
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.time.LocalTime;
+import java.time.format.DateTimeFormatter;
+import java.util.regex.Pattern;
+import java.util.regex.Matcher;
+
 
 public class MainTab extends JPanel implements OllamaRequestManager.StatusUpdateListener {
     
@@ -42,11 +61,28 @@ public class MainTab extends JPanel implements OllamaRequestManager.StatusUpdate
     private JTextArea responseArea;
     private JButton askAIButton;
     private JButton cancelButton;
+    private JButton clearChatButton;  // New button
+    private JButton consoleAskButton;
+    private JButton consoleCancelButton;
+    // NEW: Conversation history
+    private ConversationHistory conversationHistory;
     
+    // NEW: Reference to releases button for color updates
+    private JButton releasesButton;
+    
+    // Status panel reference for updates
+    private JTextArea statusPlaceholder;
+
     private FindingCollector currentFindings;
     private OllamaClient ollamaClient;
     private OllamaRequestManager requestManager;
-    
+    private Properties configProperties;
+    private File configFile;
+
+    // AI Console request tracking
+    private OllamaRequest currentConsoleRequest;
+    private SwingWorker<String, Void> currentAIWorker;
+
     // Maps for tracking requests
     private final Map<String, Integer> findingIdToRowMap;
     private final Map<Integer, List<OllamaRequest>> rowToRequestsMap;
@@ -59,6 +95,11 @@ public class MainTab extends JPanel implements OllamaRequestManager.StatusUpdate
     private static final int COL_CONFIDENCE = 4;
     private static final int COL_AI_STATUS = 5;  // New column
     
+    // Model listing components
+    private JList<String> modelList;
+    private DefaultListModel<String> modelListModel;
+    private JPanel modelPanel;
+
     public MainTab(MontoyaApi api) {
         this.api = api;
         this.currentFindings = new FindingCollector();
@@ -68,6 +109,7 @@ public class MainTab extends JPanel implements OllamaRequestManager.StatusUpdate
         
         this.findingIdToRowMap = new HashMap<>();
         this.rowToRequestsMap = new HashMap<>();
+        this.conversationHistory = new ConversationHistory();
         
         setLayout(new BorderLayout());
         
@@ -105,6 +147,13 @@ public class MainTab extends JPanel implements OllamaRequestManager.StatusUpdate
             }
         };
         
+        // Perform background version check on startup
+        performBackgroundVersionCheck();
+        
+        // Load saved version check state and update button color
+        Configuration config = Configuration.getInstance();
+        updateReleasesButtonColor(config.isUpdateAvailable());
+
         findingsTable = new JTable(tableModel);
         findingsTable.setDefaultRenderer(Double.class, new ConfidenceRenderer());
         findingsTable.setDefaultRenderer(Object.class, new AIStatusRenderer());
@@ -202,6 +251,10 @@ public class MainTab extends JPanel implements OllamaRequestManager.StatusUpdate
         JPanel promptPanel = createPromptPanel();
         tabbedPane.addTab("AI Console", promptPanel);
         
+        // Adding Configuration tab
+        JPanel configPanel = createConfigurationPanel();
+        tabbedPane.addTab("Configuration", configPanel);
+
         add(tabbedPane, BorderLayout.CENTER);
         
         // Set column widths
@@ -239,29 +292,333 @@ public class MainTab extends JPanel implements OllamaRequestManager.StatusUpdate
     }
 
     private JPanel createTopPanel() {
-        JPanel panel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        JPanel panel = new JPanel(new BorderLayout());
         
-        panel.add(new JLabel("APK Directory:"));
+        // Left panel with all existing components
+        JPanel leftPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        
+        leftPanel.add(new JLabel("APK Directory:"));
         
         directoryField = new JTextField(40);
-        panel.add(directoryField);
+        leftPanel.add(directoryField);
         
         JButton browseButton = new JButton("Browse...");
         browseButton.addActionListener(e -> browseForDirectory());
-        panel.add(browseButton);
+        leftPanel.add(browseButton);
         
         analyzeButton = new JButton("Analyze");
         analyzeButton.addActionListener(e -> startAnalysis());
-        panel.add(analyzeButton);
+        leftPanel.add(analyzeButton);
         
         progressBar = new JProgressBar();
         progressBar.setStringPainted(true);
         progressBar.setPreferredSize(new Dimension(200, 25));
-        panel.add(progressBar);
+        leftPanel.add(progressBar);
+        
+        // Right panel with Support Development button
+        JPanel rightPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+        // Add New Releases button first (will appear left of Support Development due to FlowLayout.RIGHT)
+        releasesButton = new JButton("New releases");
+        releasesButton.addActionListener(e -> handleNewReleasesClick());
+        rightPanel.add(releasesButton);
+
+        JButton supportButton = new JButton("Support Development");
+        supportButton.addActionListener(e -> {
+            // Open GitHub support page in default browser
+            try {
+                String url = "https://github.com/BerserkiKun/apk-o-llama?tab=readme-ov-file#support-development";
+                java.awt.Desktop desktop = java.awt.Desktop.getDesktop();
+                
+                if (desktop.isSupported(java.awt.Desktop.Action.BROWSE)) {
+                    desktop.browse(new java.net.URI(url));
+                } else {
+                    // Fallback for systems where Desktop.browse is not supported
+                    showBrowserError(MainTab.this, "Desktop browse action not supported on this system.");
+                }
+            } catch (java.net.URISyntaxException ex) {
+                // This should never happen with the hardcoded URL, but handle gracefully
+                showBrowserError(MainTab.this, "Invalid URL format.");
+            } catch (java.io.IOException ex) {
+                // Browser couldn't be opened
+                showBrowserError(MainTab.this, "Browser couldn't be opened. Please check your system settings.");
+            }
+        });
+        rightPanel.add(supportButton);
+        
+        // Add both panels to main panel
+        panel.add(leftPanel, BorderLayout.CENTER);
+        panel.add(rightPanel, BorderLayout.EAST);
         
         return panel;
     }
     
+    private void showBrowserError(Component parent, String message) {
+        SwingUtilities.invokeLater(() -> {
+            JOptionPane.showMessageDialog(
+                parent != null ? parent : MainTab.this,
+                message,
+                "Browser Error",
+                JOptionPane.WARNING_MESSAGE
+            );
+        });
+    }
+
+    /**
+     * Handles click on New Releases button
+     */
+    private void handleNewReleasesClick() {
+        // Switch to Configuration tab
+        for (java.awt.Component comp : this.getComponents()) {
+            if (comp instanceof JTabbedPane) {
+                JTabbedPane tabbedPane = (JTabbedPane) comp;
+                // Find Configuration tab (index 2)
+                tabbedPane.setSelectedIndex(2);
+                break;
+            }
+        }
+        
+        // Get configuration
+        Configuration config = Configuration.getInstance();
+        
+        // Update status panel with checking message
+        if (statusPlaceholder != null) {
+            statusPlaceholder.setText("System Status Information\n\n" +
+                                    "• Checking for new version on GitHub...\n" +
+                                    "• Please wait...\n\nAuthor: BerserkiKun | GitHub");
+        }
+        
+        // Perform version check in background
+        SwingWorker<VersionCheckResult, Void> worker = new SwingWorker<>() {
+            @Override
+            protected VersionCheckResult doInBackground() {
+                return checkForNewVersion();
+            }
+            
+            @Override
+            protected void done() {
+                try {
+                    VersionCheckResult result = get();
+                    Configuration config = Configuration.getInstance();
+                    
+                    if (result.error != null) {
+                        // Error occurred
+                        if (statusPlaceholder != null) {
+                            statusPlaceholder.setText("System Status Information\n\n" +
+                                                    "• Version Check: FAILED\n" +
+                                                    "• Error: " + result.error + "\n" +
+                                                    "• Time: " + LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss")) + "\n\nAuthor: BerserkiKun | GitHub");
+                        }
+                        return;
+                    }
+                    
+                    if (result.updateAvailable) {
+                        // Update available
+                        config.setUpdateAvailable(true);
+                        config.setLatestVersion(result.latestVersion);
+                        config.setLastVersionCheckTime(System.currentTimeMillis());
+                        config.setVersionCheckError(null);
+                        config.saveToFile();
+                        
+                        // Update button color
+                        updateReleasesButtonColor(true);
+                        
+                        // Show in status panel
+                        if (statusPlaceholder != null) {
+                            statusPlaceholder.setText("System Status Information\n\n" +
+                                                    "• New version available: " + result.latestVersion + "\n" +
+                                                    "• Opening GitHub release page...\n" +
+                                                    "• Time: " + LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss")) + "\n\nAuthor: BerserkiKun | GitHub");
+                        }
+                        
+                        // Open GitHub releases page in browser
+                        openGitHubReleasesPage();
+                        
+                    } else {
+                        // No update available
+                        config.setUpdateAvailable(false);
+                        config.setLatestVersion(result.latestVersion);
+                        config.setLastVersionCheckTime(System.currentTimeMillis());
+                        config.setVersionCheckError(null);
+                        config.saveToFile();
+                        
+                        // Update button color
+                        updateReleasesButtonColor(false);
+                        
+                        // Show in status panel
+                        if (statusPlaceholder != null) {
+                            statusPlaceholder.setText("System Status Information\n\n" +
+                                                    "• No new releases found.\n" +
+                                                    "• You are already using the latest version: " + 
+                                                    VersionManager.getCurrentVersion() + "\n" +
+                                                    "• Latest on GitHub: " + result.latestVersion + "\n" +
+                                                    "• Time: " + LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss")) + "\n\nAuthor: BerserkiKun | GitHub");
+                        }
+                    }
+                    
+                } catch (Exception e) {
+                    if (statusPlaceholder != null) {
+                        statusPlaceholder.setText("System Status Information\n\n" +
+                                                "• Version Check: FAILED\n" +
+                                                "• Error: " + e.getMessage() + "\n" +
+                                                "• Time: " + LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss")) + "\n\nAuthor: BerserkiKun | GitHub");
+                    }
+                }
+            }
+        };
+        worker.execute();
+    }
+
+    /**
+    * Opens GitHub releases page in default browser
+    */
+    private void openGitHubReleasesPage() {
+        try {
+            String url = "https://github.com/BerserkiKun/apk-o-llama/releases";
+            java.awt.Desktop desktop = java.awt.Desktop.getDesktop();
+            
+            if (desktop.isSupported(java.awt.Desktop.Action.BROWSE)) {
+                desktop.browse(new java.net.URI(url));
+            } else {
+                showBrowserError(MainTab.this, "Desktop browse action not supported on this system.");
+            }
+        } catch (Exception ex) {
+            showBrowserError(MainTab.this, "Could not open browser: " + ex.getMessage());
+        }
+    }
+
+    /**
+    * Updates the New Releases button color based on update availability
+    */
+    private void updateReleasesButtonColor(boolean updateAvailable) {
+        SwingUtilities.invokeLater(() -> {
+            if (releasesButton != null) {
+                if (updateAvailable) {
+                    releasesButton.setBackground(Color.YELLOW); // Yellow
+                    releasesButton.setOpaque(true);
+                    releasesButton.setBorderPainted(false);
+                } else {
+                    releasesButton.setBackground(null);
+                    releasesButton.setOpaque(false);
+                    releasesButton.setBorderPainted(true);
+                }
+            }
+        });
+    }
+
+    /**
+    * Simple class to hold version check results
+    */
+    private static class VersionCheckResult {
+        String latestVersion;
+        boolean updateAvailable;
+        String error;
+        
+        VersionCheckResult(String latestVersion, boolean updateAvailable, String error) {
+            this.latestVersion = latestVersion;
+            this.updateAvailable = updateAvailable;
+            this.error = error;
+        }
+    }
+
+    /**
+    * Checks GitHub for the latest release version
+    */
+    private VersionCheckResult checkForNewVersion() {
+        String currentVersion = VersionManager.getCurrentVersion();
+        
+        try {
+            // GitHub API URL for releases
+            URL url = new URI("https://api.github.com/repos/BerserkiKun/apk-o-llama/releases/latest").toURL();
+            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("GET");
+            conn.setConnectTimeout(10000); // 10 second timeout
+            conn.setReadTimeout(10000);
+            conn.setRequestProperty("Accept", "application/vnd.github.v3+json");
+            
+            int responseCode = conn.getResponseCode();
+            
+            if (responseCode == 200) {
+                // Read response
+                StringBuilder response = new StringBuilder();
+                try (BufferedReader br = new BufferedReader(
+                        new InputStreamReader(conn.getInputStream()))) {
+                    String line;
+                    while ((line = br.readLine()) != null) {
+                        response.append(line);
+                    }
+                }
+                
+                // Parse JSON to get tag_name
+                String json = response.toString();
+                String tagName = extractTagName(json);
+                
+                if (tagName != null) {
+                    // Remove 'v' prefix if present
+                    String latestVersion = tagName.startsWith("v") ? tagName.substring(1) : tagName;
+                    
+                    // Compare versions
+                    boolean updateAvailable = compareVersions(latestVersion, currentVersion) > 0;
+                    
+                    return new VersionCheckResult(latestVersion, updateAvailable, null);
+                } else {
+                    return new VersionCheckResult(null, false, "Could not parse version from GitHub response");
+                }
+                
+            } else if (responseCode == 403) {
+                // Rate limited
+                return new VersionCheckResult(null, false, "GitHub API rate limit exceeded. Try again later.");
+            } else {
+                return new VersionCheckResult(null, false, "GitHub returned error code: " + responseCode);
+            }
+            
+        } catch (java.net.UnknownHostException e) {
+            return new VersionCheckResult(null, false, "No internet connection. GitHub unreachable.");
+        } catch (java.net.SocketTimeoutException e) {
+            return new VersionCheckResult(null, false, "Connection timeout. GitHub is slow or unreachable.");
+        } catch (Exception e) {
+            return new VersionCheckResult(null, false, "Error checking for updates: " + e.getMessage());
+        }
+    }
+
+    /**
+    * Extracts tag_name from GitHub API JSON response
+    */
+    private String extractTagName(String json) {
+        try {
+            Pattern pattern = Pattern.compile("\"tag_name\"\\s*:\\s*\"([^\"]+)\"");
+            Matcher matcher = pattern.matcher(json);
+            if (matcher.find()) {
+                return matcher.group(1);
+            }
+        } catch (Exception e) {
+            // Fallback to simple approach
+        }
+        return null;
+    }
+
+    /**
+     * Compares two version strings
+     * Returns: 
+     *   positive if v1 > v2
+     *   zero if v1 == v2
+     *   negative if v1 < v2
+     */
+    private int compareVersions(String v1, String v2) {
+        String[] parts1 = v1.split("\\.");
+        String[] parts2 = v2.split("\\.");
+        
+        int length = Math.max(parts1.length, parts2.length);
+        for (int i = 0; i < length; i++) {
+            int p1 = i < parts1.length ? Integer.parseInt(parts1[i]) : 0;
+            int p2 = i < parts2.length ? Integer.parseInt(parts2[i]) : 0;
+            
+            if (p1 != p2) {
+                return p1 - p2;
+            }
+        }
+        return 0;
+    }
+
     private JPanel createPromptPanel() {
         JPanel panel = new JPanel(new BorderLayout());
         
@@ -273,22 +630,47 @@ public class MainTab extends JPanel implements OllamaRequestManager.StatusUpdate
         JScrollPane promptScroll = new JScrollPane(promptArea);
         panel.add(promptScroll, BorderLayout.CENTER);
         
-        JButton askButton = new JButton("Ask AI");
-        askButton.addActionListener(e -> askAI());
+        // CHANGE: Store references to class fields instead of local variables
+        consoleAskButton = new JButton("Ask AI");
+        consoleAskButton.addActionListener(e -> askAI());
         
-        JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
-        buttonPanel.add(askButton);
+        consoleCancelButton = new JButton("Cancel");
+        consoleCancelButton.addActionListener(e -> cancelAIConsoleRequest());
+        consoleCancelButton.setEnabled(false); // Initially disabled
+
+        JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        buttonPanel.add(consoleAskButton);
+        buttonPanel.add(consoleCancelButton);
+
+        // Add Clear button - always enabled
+        JButton consoleClearButton = new JButton("Clear");
+        consoleClearButton.addActionListener(e -> {
+            int choice = JOptionPane.showConfirmDialog(
+                MainTab.this,
+                "LLM response will be cleared. The prompt input will be preserved.\nDo you want to continue?",
+                "Clear Response",
+                JOptionPane.YES_NO_OPTION,
+                JOptionPane.QUESTION_MESSAGE
+            );
+            
+            if (choice == JOptionPane.YES_OPTION) {
+                clearAIResponse();
+            }
+        });
+        consoleClearButton.setEnabled(true); // Always enabled as per requirement
+        buttonPanel.add(consoleClearButton);
         panel.add(buttonPanel, BorderLayout.SOUTH);
         
-        responseArea = new JTextArea();
+        responseArea = new JTextArea();  // Keep as responseArea
         responseArea.setEditable(false);
         responseArea.setLineWrap(true);
         responseArea.setWrapStyleWord(true);
+        responseArea.setText("Click \"Ask AI\" to start analysis with Ollama\n");
         JScrollPane responseScroll = new JScrollPane(responseArea);
         
         JSplitPane splitPane = new JSplitPane(JSplitPane.VERTICAL_SPLIT, 
-                                              panel, responseScroll);
-        splitPane.setDividerLocation(100);
+                                            panel, responseScroll);
+        splitPane.setDividerLocation(250);
         
         JPanel wrapper = new JPanel(new BorderLayout());
         wrapper.add(splitPane, BorderLayout.CENTER);
@@ -296,6 +678,462 @@ public class MainTab extends JPanel implements OllamaRequestManager.StatusUpdate
         return wrapper;
     }
     
+    private JPanel createConfigurationPanel() {
+        JPanel panel = new JPanel(new BorderLayout());
+        panel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+        
+        // Create main config panel with GridBagLayout for organized layout
+        JPanel configContent = new JPanel(new GridBagLayout());  // THIS panel uses GridBagLayout
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.insets = new Insets(5, 5, 5, 5);
+        
+        int row = 0;
+        
+        // ========== OLLAMA CONFIGURATION SECTION ==========
+        gbc.gridx = 0;
+        gbc.gridy = row++;
+        gbc.gridwidth = 2;
+        gbc.anchor = GridBagConstraints.WEST;
+        JLabel ollamaLabel = new JLabel("Ollama Configuration");
+        ollamaLabel.setFont(ollamaLabel.getFont().deriveFont(Font.BOLD, 14f));
+        configContent.add(ollamaLabel, gbc);  // ← FIXED: add to configContent, not panel
+        
+        // Endpoint
+        gbc.gridwidth = 1;
+        gbc.gridy = row++;
+        gbc.gridx = 0;
+        configContent.add(new JLabel("Endpoint URL:"), gbc);  // ← FIXED
+        gbc.gridx = 1;
+        JTextField endpointField = new JTextField(ollamaClient.getEndpoint(), 30);
+        configContent.add(endpointField, gbc);  // ← FIXED
+        
+        // Model
+        gbc.gridy = row++;
+        gbc.gridx = 0;
+        configContent.add(new JLabel("Model:"), gbc);  // ← FIXED
+        gbc.gridx = 1;
+        JTextField modelField = new JTextField(ollamaClient.getModel(), 30);
+        configContent.add(modelField, gbc);  // ← FIXED
+        
+        // Timeouts
+        gbc.gridy = row++;
+        gbc.gridx = 0;
+        configContent.add(new JLabel("Connect Timeout (ms):"), gbc);  // ← FIXED
+        gbc.gridx = 1;
+        JTextField connectTimeoutField = new JTextField(String.valueOf(ollamaClient.getConnectTimeout()), 10);
+        configContent.add(connectTimeoutField, gbc);  // ← FIXED
+        
+        gbc.gridy = row++;
+        gbc.gridx = 0;
+        configContent.add(new JLabel("Read Timeout (ms):"), gbc);  // ← FIXED
+        gbc.gridx = 1;
+        JTextField readTimeoutField = new JTextField(String.valueOf(ollamaClient.getReadTimeout()), 10);
+        configContent.add(readTimeoutField, gbc);  // ← FIXED
+        
+        gbc.gridy = row++;
+        gbc.gridx = 0;
+        configContent.add(new JLabel("Max Tokens:"), gbc);  // ← FIXED
+        gbc.gridx = 1;
+        JTextField maxTokensField = new JTextField(String.valueOf(ollamaClient.getMaxTokens()), 10);
+        configContent.add(maxTokensField, gbc);  // ← FIXED
+        
+        // Test Connection Button
+        gbc.gridy = row++;
+        gbc.gridx = 0;
+        gbc.gridwidth = 2;
+        gbc.anchor = GridBagConstraints.CENTER;
+        JButton testButton = new JButton("Test Connection");
+        JLabel testResultLabel = new JLabel(" ");
+        testResultLabel.setForeground(new Color(0, 150, 0));
+        configContent.add(testButton, gbc);  // ← FIXED
+        
+        gbc.gridy = row++;
+        configContent.add(testResultLabel, gbc);  // ← FIXED
+        
+        // ========== AVAILABLE MODELS & STATUS SECTION (SIDE BY SIDE) ==========
+        gbc.gridy = row++;
+        gbc.gridx = 0;
+        gbc.gridwidth = 2;
+        gbc.anchor = GridBagConstraints.WEST;
+        gbc.insets = new Insets(15, 5, 5, 5);
+        JLabel modelsStatusLabel = new JLabel("System Status");
+        modelsStatusLabel.setFont(modelsStatusLabel.getFont().deriveFont(Font.BOLD, 14f));
+        configContent.add(modelsStatusLabel, gbc);
+
+        // Create a panel to hold both sections side by side
+        gbc.gridy = row++;
+        gbc.gridx = 0;
+        gbc.gridwidth = 2;
+        gbc.fill = GridBagConstraints.BOTH;
+        gbc.weightx = 1.0;
+        gbc.weighty = 0.3;
+        gbc.insets = new Insets(5, 5, 5, 5);
+
+        JPanel dualPanel = new JPanel(new GridLayout(1, 2, 10, 0)); // 1 row, 2 columns, 10px horizontal gap
+
+        // LEFT PANEL - Available Models
+        JPanel modelsPanel = new JPanel(new BorderLayout());
+        modelsPanel.setBorder(BorderFactory.createTitledBorder(
+            BorderFactory.createEtchedBorder(), 
+            "Available Models",
+            javax.swing.border.TitledBorder.DEFAULT_JUSTIFICATION,
+            javax.swing.border.TitledBorder.DEFAULT_POSITION,
+            new Font("SansSerif", Font.BOLD, 12)
+        ));
+
+        modelListModel = new DefaultListModel<>();
+        modelList = new JList<>(modelListModel);
+        modelList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        modelList.setVisibleRowCount(5);
+        modelList.setEnabled(false); // Initially disabled
+
+        JScrollPane modelScrollPane = new JScrollPane(modelList);
+        modelsPanel.add(modelScrollPane, BorderLayout.CENTER);
+
+        // Add note inside models panel
+        JLabel modelNoteLabel = new JLabel("Models appear here after successful connection test");
+        modelNoteLabel.setFont(modelNoteLabel.getFont().deriveFont(Font.ITALIC, 11f));
+        modelNoteLabel.setForeground(Color.GRAY);
+        modelNoteLabel.setHorizontalAlignment(JLabel.CENTER);
+        modelsPanel.add(modelNoteLabel, BorderLayout.SOUTH);
+
+        // RIGHT PANEL - Status
+        JPanel statusPanel = new JPanel(new BorderLayout());
+        statusPanel.setBorder(BorderFactory.createTitledBorder(
+            BorderFactory.createEtchedBorder(), 
+            "Status",
+            javax.swing.border.TitledBorder.DEFAULT_JUSTIFICATION,
+            javax.swing.border.TitledBorder.DEFAULT_POSITION,
+            new Font("SansSerif", Font.BOLD, 12)
+        ));
+
+        // Placeholder content for Status panel
+        statusPlaceholder = new JTextArea();
+        statusPlaceholder.setEditable(false);
+        //statusPlaceholder.setBackground(new Color(245, 245, 245));
+        statusPlaceholder.setText("System Status Information\n\n" +
+                                "• Ollama Connection: Not Tested\n" +
+                                "• Model Status: Not Loaded\n" +
+                                "• Last Check: Never\n\n" +
+                                "Click 'Test Connection' to update status.\n\nAuthor: BerserkiKun | GitHub");
+        statusPlaceholder.setMargin(new Insets(10, 10, 10, 10));
+        statusPlaceholder.setFont(new Font("Monospaced", Font.PLAIN, 11));
+
+        JScrollPane statusScrollPane = new JScrollPane(statusPlaceholder);
+        statusPanel.add(statusScrollPane, BorderLayout.CENTER);
+
+        // Add both panels to the dual panel
+        dualPanel.add(modelsPanel);
+        dualPanel.add(statusPanel);
+
+        // Add the dual panel to the main config content
+        configContent.add(dualPanel, gbc);
+
+        // Reset gridbag constraints for remaining components
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 0;
+        gbc.weighty = 0;
+
+        // Reset gridbag constraints for remaining components
+        gbc.weightx = 0;
+        gbc.weighty = 0;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.insets = new Insets(5, 5, 5, 5);
+
+        // ========== SCAN CONFIGURATION SECTION ==========
+        gbc.gridy = row++;
+        gbc.gridx = 0;
+        gbc.gridwidth = 2;
+        gbc.anchor = GridBagConstraints.WEST;
+        JLabel scanLabel = new JLabel("Scan Configuration");
+        scanLabel.setFont(scanLabel.getFont().deriveFont(Font.BOLD, 14f));
+        configContent.add(scanLabel, gbc);  // ← FIXED
+        
+        // Entropy threshold
+        gbc.gridwidth = 1;
+        gbc.gridy = row++;
+        gbc.gridx = 0;
+        configContent.add(new JLabel("Entropy Threshold:"), gbc);  // ← FIXED
+        gbc.gridx = 1;
+        JTextField entropyField = new JTextField("4.5", 10);
+        configContent.add(entropyField, gbc);  // ← FIXED
+        
+        // Max file size to scan
+        gbc.gridy = row++;
+        gbc.gridx = 0;
+        configContent.add(new JLabel("Max File Size (MB):"), gbc);  // ← FIXED
+        gbc.gridx = 1;
+        JTextField maxSizeField = new JTextField("10", 10);
+        configContent.add(maxSizeField, gbc);  // ← FIXED
+        
+        // Checkboxes for scan options
+        gbc.gridy = row++;
+        gbc.gridx = 0;
+        gbc.gridwidth = 2;
+        JCheckBox scanBinaryCheck = new JCheckBox("Scan binary files", true);
+        configContent.add(scanBinaryCheck, gbc);  // ← FIXED
+        
+        gbc.gridy = row++;
+        JCheckBox entropyCheck = new JCheckBox("Enable entropy-based detection", true);
+        configContent.add(entropyCheck, gbc);  // ← FIXED
+        
+        gbc.gridy = row++;
+        JCheckBox debugModeCheck = new JCheckBox("Debug mode (verbose output)", false);
+        configContent.add(debugModeCheck, gbc);  // ← FIXED
+        
+        // ========== LOAD CONFIGURATION VALUES ==========
+        Configuration config = Configuration.getInstance();
+
+        endpointField.setText(config.getOllamaEndpoint());
+        modelField.setText(config.getOllamaModel());
+        connectTimeoutField.setText(String.valueOf(config.getConnectTimeout()));
+        readTimeoutField.setText(String.valueOf(config.getReadTimeout()));
+        maxTokensField.setText(String.valueOf(config.getMaxTokens()));
+        entropyField.setText(String.valueOf(config.getEntropyThreshold()));
+        maxSizeField.setText(String.valueOf(config.getMaxFileSizeMB()));
+        scanBinaryCheck.setSelected(config.isScanBinaryFiles());
+        entropyCheck.setSelected(config.isEntropyDetectionEnabled());
+        debugModeCheck.setSelected(config.isDebugMode());
+
+        // ========== SAVE BUTTON ==========
+        gbc.gridy = row++;
+        gbc.insets = new Insets(20, 5, 5, 5);
+        JButton saveButton = new JButton("Save Configuration");
+        saveButton.setFont(saveButton.getFont().deriveFont(Font.BOLD));
+        configContent.add(saveButton, gbc);  // ← FIXED
+        
+        // Wrap in scroll pane and add to main panel
+        JScrollPane scrollPane = new JScrollPane(configContent);
+        scrollPane.setBorder(BorderFactory.createEmptyBorder());
+        panel.add(scrollPane, BorderLayout.CENTER);  // ← This is correct - panel uses BorderLayout
+        
+        // Add action listeners (these remain the same)
+        testButton.addActionListener(e -> {
+            testResultLabel.setText("Testing...");
+            testResultLabel.setForeground(Color.BLACK);
+            
+            // Clear previous model list
+            modelListModel.clear();
+            modelList.setEnabled(false);
+            
+            // Update status panel - Testing in progress
+            if (statusPlaceholder != null) {
+                statusPlaceholder.setText("System Status Information\n\n" +
+                                        "• Testing connection to Ollama...\n" +
+                                        "• Please wait...\n" +
+                                        "• Time: " + LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss")) + "\n\nAuthor: BerserkiKun | GitHub");
+            }
+            
+            SwingWorker<ModelsResult, Void> worker = new SwingWorker<>() {
+                @Override
+                protected ModelsResult doInBackground() {
+                    ModelsResult result = new ModelsResult();
+                    try {
+                        // Use current field values
+                        OllamaClient testClient = new OllamaClient(
+                            endpointField.getText().trim(),
+                            modelField.getText().trim()
+                        );
+                        
+                        // Check connection
+                        result.connected = testClient.isAvailable();
+                        
+                        if (result.connected) {
+                            // Fetch models using a direct HTTP call to /api/tags
+                            result.models = fetchModels(endpointField.getText().trim());
+                        }
+                    } catch (Exception ex) {
+                        result.error = ex.getMessage();
+                    }
+                    return result;
+                }
+                
+                @Override
+                protected void done() {
+                    try {
+                        ModelsResult result = get();
+                        String currentTime = LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss"));
+                        
+                        if (result.error != null) {
+                            testResultLabel.setText("✗ Error: " + result.error);
+                            testResultLabel.setForeground(Color.RED);
+                            modelNoteLabel.setText("Failed to fetch models");
+                            
+                            // Update status panel with error
+                            if (statusPlaceholder != null) {
+                                statusPlaceholder.setText("System Status Information\n\n" +
+                                                        "• Ollama Connection: ✗ Failed\n" +
+                                                        "• Error: " + result.error + "\n" +
+                                                        "• Last Check: " + currentTime + "\n\n" +
+                                                        "Click 'Test Connection' to update status." + "\n\nAuthor: BerserkiKun | GitHub");
+                            }
+                            
+                        } else if (result.connected) {
+                            testResultLabel.setText("✓ Connection successful!");
+                            testResultLabel.setForeground(new Color(0, 150, 0));
+                            
+                            if (result.models != null && !result.models.isEmpty()) {
+                                // Populate model list
+                                for (String model : result.models) {
+                                    modelListModel.addElement(model);
+                                }
+                                modelList.setEnabled(true);
+                                modelNoteLabel.setText(result.models.size() + " model(s) available");
+                                
+                                // Update status panel with success and models
+                                if (statusPlaceholder != null) {
+                                    statusPlaceholder.setText("System Status Information\n\n" +
+                                                            "• Ollama Connection: ✓ Connected\n" +
+                                                            "• Model Status: " + result.models.size() + " model(s) loaded\n" +
+                                                            "• Last Check: " + currentTime + "\n\n" +
+                                                            "Click 'Test Connection' to update status." + "\n\nAuthor: BerserkiKun | GitHub");
+                                }
+                            } else {
+                                modelNoteLabel.setText("No models installed. Run 'ollama pull <model>'");
+                                modelNoteLabel.setForeground(new Color(200, 100, 0)); // Orange warning
+                                
+                                // Update status panel with success but no models
+                                if (statusPlaceholder != null) {
+                                    statusPlaceholder.setText("System Status Information\n\n" +
+                                                            "• Ollama Connection: ✓ Connected\n" +
+                                                            "• Model Status: No models installed\n" +
+                                                            "• Last Check: " + currentTime + "\n\n" +
+                                                            "Click 'Test Connection' to update status." + "\n\nAuthor: BerserkiKun | GitHub");
+                                }
+                            }
+                        } else {
+                            testResultLabel.setText("✗ Connection failed - Check if Ollama is running");
+                            testResultLabel.setForeground(Color.RED);
+                            modelNoteLabel.setText("Connect to see available models");
+                            
+                            // Update status panel with failure
+                            if (statusPlaceholder != null) {
+                                statusPlaceholder.setText("System Status Information\n\n" +
+                                                        "• Ollama Connection: ✗ Failed\n" +
+                                                        "• Model Status: Not Loaded\n" +
+                                                        "• Last Check: " + currentTime + "\n\n" +
+                                                        "Click 'Test Connection' to update status." + "\n\nAuthor: BerserkiKun | GitHub");
+                            }
+                        }
+                    } catch (Exception ex) {
+                        testResultLabel.setText("✗ Error: " + ex.getMessage());
+                        testResultLabel.setForeground(Color.RED);
+                        modelNoteLabel.setText("Failed to load models");
+                        
+                        // Update status panel with exception
+                        if (statusPlaceholder != null) {
+                            statusPlaceholder.setText("System Status Information\n\n" +
+                                                    "• Ollama Connection: ✗ Error\n" +
+                                                    "• Error: " + ex.getMessage() + "\n" +
+                                                    "• Last Check: " + LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss")) + "\n\n" +
+                                                    "Click 'Test Connection' to update status." + "\n\nAuthor: BerserkiKun | GitHub");
+                        }
+                    }
+                }
+            };
+            worker.execute();
+        });
+
+        saveButton.addActionListener(e -> {
+            // Validate inputs
+            try {
+                String newEndpoint = endpointField.getText().trim();
+                String newModel = modelField.getText().trim();
+                int newConnectTimeout = Integer.parseInt(connectTimeoutField.getText().trim());
+                int newReadTimeout = Integer.parseInt(readTimeoutField.getText().trim());
+                int newMaxTokens = Integer.parseInt(maxTokensField.getText().trim());
+                double newEntropyThreshold = Double.parseDouble(entropyField.getText().trim());
+                int newMaxFileSize = Integer.parseInt(maxSizeField.getText().trim());
+                boolean newScanBinary = scanBinaryCheck.isSelected();
+                boolean newEntropyEnabled = entropyCheck.isSelected();
+                boolean newDebugMode = debugModeCheck.isSelected();
+                
+                // Update configuration model
+                config.setOllamaEndpoint(newEndpoint);
+                config.setOllamaModel(newModel);
+                config.setConnectTimeout(newConnectTimeout);
+                config.setReadTimeout(newReadTimeout);
+                config.setMaxTokens(newMaxTokens);
+                config.setEntropyThreshold(newEntropyThreshold);
+                config.setMaxFileSizeMB(newMaxFileSize);
+                config.setScanBinaryFiles(newScanBinary);
+                config.setEntropyDetectionEnabled(newEntropyEnabled);
+                config.setDebugMode(newDebugMode);
+                
+                // Save to file
+                config.saveToFile();
+                
+                // Create new client with updated settings
+                ollamaClient = new OllamaClient(
+                    newEndpoint, newModel, 
+                    newConnectTimeout, newReadTimeout, newMaxTokens
+                );
+                
+                // Update request manager
+                requestManager = new OllamaRequestManager(ollamaClient);
+                requestManager.addStatusUpdateListener(this);
+                
+                JOptionPane.showMessageDialog(panel, 
+                    "Configuration saved successfully!\nSettings will apply to next scan and AI requests.", 
+                    "Success", 
+                    JOptionPane.INFORMATION_MESSAGE);
+                    
+            } catch (NumberFormatException ex) {
+                JOptionPane.showMessageDialog(panel, 
+                    "Invalid number format in fields", 
+                    "Error", 
+                    JOptionPane.ERROR_MESSAGE);
+            }
+        });
+        
+        return panel;
+    }
+
+    private List<String> fetchModels(String endpoint) throws Exception {
+        List<String> models = new ArrayList<>();
+        
+        URL url = new URI(endpoint + "/api/tags").toURL();
+        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+        conn.setRequestMethod("GET");
+        conn.setConnectTimeout(5000);
+        conn.setReadTimeout(5000);
+        
+        try {
+            if (conn.getResponseCode() == 200) {
+                StringBuilder response = new StringBuilder();
+                try (BufferedReader br = new BufferedReader(
+                        new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
+                    String line;
+                    while ((line = br.readLine()) != null) {
+                        response.append(line);
+                    }
+                }
+                
+                // Simple JSON parsing - extract model names
+                String json = response.toString();
+                // Look for "name":"modelname" patterns
+                java.util.regex.Pattern pattern = 
+                    java.util.regex.Pattern.compile("\"name\"\\s*:\\s*\"([^\"]+)\"");
+                java.util.regex.Matcher matcher = pattern.matcher(json);
+                
+                while (matcher.find()) {
+                    models.add(matcher.group(1));
+                }
+            }
+        } finally {
+            conn.disconnect();
+        }
+        
+        return models;
+    }
+
+    private static class ModelsResult {
+        boolean connected = false;
+        List<String> models = null;
+        String error = null;
+    }
+
     private void browseForDirectory() {
         JFileChooser chooser = new JFileChooser();
         chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
@@ -402,10 +1240,10 @@ public class MainTab extends JPanel implements OllamaRequestManager.StatusUpdate
         updateButtonStates();
         
         detailsArea.setText(String.format("""
-            Analysis Complete
+            Rule Based Analysis has Completed!
             
             Files Scanned: %d
-            Duration: %d ms
+            Scan Duration: %d ms
             Total Findings: %d
             
             Select findings and click "Ask Ollama" for AI analysis.
@@ -527,7 +1365,9 @@ public class MainTab extends JPanel implements OllamaRequestManager.StatusUpdate
                 ══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
                 |                                                                                                      🤖 AI ANALYSIS                                                                                                     |
                 ══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
-                
+                AI analysis is for reference only, DYOR before coming to a conclusion.
+                ----------------------------------------------------------------------------------
+
                 %s
                 """,
                 wrapText(aiAnalysis, 120)
@@ -577,22 +1417,62 @@ public class MainTab extends JPanel implements OllamaRequestManager.StatusUpdate
             return;
         }
         
+        // Check Ollama availability first
+        if (!ollamaClient.isAvailable()) {
+            int response = JOptionPane.showConfirmDialog(this,
+                "Ollama is not available. Would you like to check connection settings?",
+                "Connection Error",
+                JOptionPane.YES_NO_OPTION,
+                JOptionPane.ERROR_MESSAGE);
+            
+            if (response == JOptionPane.YES_OPTION) {
+                // Find the APK-o-llama's internal tabbed pane
+                for (java.awt.Component comp : this.getComponents()) {
+                    if (comp instanceof JTabbedPane) {
+                        JTabbedPane internalTabbedPane = (JTabbedPane) comp;
+                        // Switch to Configuration tab (index 2)
+                        internalTabbedPane.setSelectedIndex(2);
+                        break;
+                    }
+                }
+            }
+            return;
+        }
+
         // Build list of selected findings
         List<Finding> selectedFindings = new ArrayList<>();
         Map<Finding, Integer> findingToRowMap = new HashMap<>();
         
-        for (int row : selectedRows) {
-            // Convert view index to model index for sorting compatibility
-            int modelRow = findingsTable.convertRowIndexToModel(row);
+        for (int viewRow : selectedRows) {
+            int modelRow = findingsTable.convertRowIndexToModel(viewRow);
             Finding finding = currentFindings.getAllFindings().get(modelRow);
+            
+            // Check if this finding already has an active request
+            List<OllamaRequest> existingRequests = requestManager.getRequestsForFinding(finding.getId());
+            boolean hasActiveRequest = existingRequests.stream()
+                .anyMatch(r -> r.getStatus() == AIStatus.PENDING || 
+                            r.getStatus() == AIStatus.IN_PROGRESS);
+            
+            if (hasActiveRequest) {
+                String status = existingRequests.stream()
+                    .map(r -> r.getStatus().getDisplayName())
+                    .findFirst().orElse("Unknown");
+                
+                int choice = JOptionPane.showConfirmDialog(this,
+                    "This finding already has a " + status + " request. Create new one?",
+                    "Request Already Exists",
+                    JOptionPane.YES_NO_OPTION);
+                
+                if (choice != JOptionPane.YES_OPTION) {
+                    continue;
+                }
+            }
+            
             selectedFindings.add(finding);
             findingToRowMap.put(finding, modelRow);
         }
         
-        // Check Ollama availability
-        if (!ollamaClient.isAvailable()) {
-            responseArea.setText("Error: Ollama is not available. " +
-                "Make sure Ollama is running (ollama serve)");
+        if (selectedFindings.isEmpty()) {
             return;
         }
         
@@ -602,18 +1482,18 @@ public class MainTab extends JPanel implements OllamaRequestManager.StatusUpdate
         // Create base prompt
         String promptBase = """
             You are a security researcher with 10 years of experience, writing a bug bounty–style vulnerability report. 
-            Based on the details below, generate a clear, professional write-up suitable for submission to a bug bounty program.
+            Based on the details below, Determine whether this finding represents a valid security vulnerability.
+            1. If it is not a valid security issue, respond only with: "invalid bug" and provide a short explanation.
+            2. If it is a valid issue, generate a clear, professional write-up suitable for submission to a bug bounty program.
 
             Vulnerability Details-
-
             * Title: %s
             * Severity: %s
             * Category: %s
             * Affected File / Location: %s
             * Evidence: %s
-
+            
             Write the report using this structure:
-
             1. Summary
             * Briefly explain what the vulnerability is and where it was found.
 
@@ -639,17 +1519,21 @@ public class MainTab extends JPanel implements OllamaRequestManager.StatusUpdate
         // Submit batch requests and store them in rowToRequestsMap
         List<OllamaRequest> batchRequests = requestManager.submitBatch(selectedFindings, promptBase, findingToRowMap);
         
+        // Clear old requests for these findings and store new ones
         for (OllamaRequest request : batchRequests) {
             Integer modelRow = findingIdToRowMap.get(request.getFinding().getId());
             if (modelRow != null) {
-                rowToRequestsMap.get(modelRow).add(request);
+                // Clear old requests list and add new one
+                List<OllamaRequest> requests = new ArrayList<>();
+                requests.add(request);
+                rowToRequestsMap.put(modelRow, requests);
             }
         }
         
         // Show progress
-        progressBar.setString("AI Analysis: 0/" + selectedRows.length);
+        progressBar.setString("AI Analysis: 0/" + selectedFindings.size());
         
-        api.logging().logToOutput("Started AI analysis for " + selectedRows.length + " findings");
+        api.logging().logToOutput("Started AI analysis for " + selectedFindings.size() + " findings");
     }
 
     private void askAI() {
@@ -660,43 +1544,303 @@ public class MainTab extends JPanel implements OllamaRequestManager.StatusUpdate
         }
         
         if (!ollamaClient.isAvailable()) {
-            responseArea.setText("Error: Ollama is not available. " +
-                "Make sure Ollama is running (ollama serve)");
+            String errorMsg = "\n============================================================\n" +
+                            "✗ ERROR: Ollama is not available\n" +
+                            "Make sure Ollama is running (ollama serve)\n" +
+                            "============================================================\n\n";
+            responseArea.append(errorMsg);
             return;
         }
         
-        responseArea.setText("Thinking...");
+        // Cancel any existing request first
+        if (currentConsoleRequest != null && !currentConsoleRequest.isCancelled() && 
+            (currentConsoleRequest.getStatus() == AIStatus.PENDING || 
+            currentConsoleRequest.getStatus() == AIStatus.IN_PROGRESS)) {
+            cancelAIConsoleRequest();
+            // Small delay to ensure cleanup
+            try { Thread.sleep(100); } catch (InterruptedException ignored) {}
+        }
         
-        SwingWorker<String, Void> worker = new SwingWorker<>() {
+        // Add user message to history (for context, NOT displayed)
+        conversationHistory.addUserMessage(prompt);
+        
+        // Clear input
+        //promptArea.setText("");
+        
+        // Get model name for display
+        String modelName = ollamaClient.getModel();
+        
+        // Capture start time
+        long startTime = System.currentTimeMillis();
+        
+        // Append analysis started block (NO timestamp, NO "You:")
+        String startedBlock = "============================================================\n" +
+                            "Analyzing with " + modelName + "...\n" +
+                            "============================================================\n";
+        responseArea.append(startedBlock);
+        
+        // Build prompt with conversation context (for AI memory)
+        String contextualPrompt = conversationHistory.getConversationContext() + prompt;
+        
+        // Create a dummy Finding for console requests (needed for OllamaRequest)
+        Finding consoleFinding = new Finding(
+            "console-" + System.currentTimeMillis(),
+            "AI Console Request",
+            Severity.INFO,
+            "Console",
+            "",
+            -1,
+            "",
+            "",
+            0.0
+        );
+        
+        // Create and track the request
+        currentConsoleRequest = new OllamaRequest(consoleFinding, contextualPrompt, -1);
+        currentConsoleRequest.setStatus(AIStatus.IN_PROGRESS);
+        
+        // Auto-scroll
+        SwingUtilities.invokeLater(() -> {
+            JScrollPane scrollPane = (JScrollPane) responseArea.getParent().getParent();
+            JScrollBar vertical = scrollPane.getVerticalScrollBar();
+            vertical.setValue(vertical.getMaximum());
+        });
+        
+        // Update button states
+        JButton askButton = findAskButton();
+        JButton cancelButton = findCancelButton();
+        if (consoleAskButton != null) consoleAskButton.setEnabled(false);
+        if (consoleCancelButton != null) consoleCancelButton.setEnabled(true);
+        
+        currentAIWorker = new SwingWorker<String, Void>() {
             @Override
             protected String doInBackground() throws Exception {
-                return ollamaClient.generate(prompt);
+                // Pass the request to enable cancellation
+                return ollamaClient.generate(contextualPrompt, currentConsoleRequest);
             }
             
             @Override
             protected void done() {
                 try {
+                    // Check if cancelled
+                    if (isCancelled() || currentConsoleRequest.isCancelled()) {
+                        String cancelledBlock = "✗ REQUEST CANCELLED\n" +
+                                            "============================================================\n\n";
+                        responseArea.append(cancelledBlock);
+                        return;
+                    }
+                    
                     String response = get();
-                    responseArea.setText(response);
+                    long duration = System.currentTimeMillis() - startTime;
+                    
+                    // Add assistant response to history (for future context)
+                    conversationHistory.addAssistantMessage(response);
+                    
+                    // Format duration nicely
+                    String durationStr;
+                    if (duration < 1000) {
+                        durationStr = duration + "ms";
+                    } else {
+                        durationStr = String.format("%.2fs", duration / 1000.0);
+                    }
+                    
+                    // Estimate token usage
+                    int promptTokens = OllamaClient.estimateTokenCount(prompt);
+                    int responseTokens = OllamaClient.estimateTokenCount(response);
+                    int totalTokens = promptTokens + responseTokens;
+                    
+                    // Append completion block
+                    String completeBlock ="✓ ANALYSIS COMPLETE\n" +
+                                        "Model: " + modelName + " | Time: " + durationStr + 
+                                        " | Tokens: ~" + totalTokens + "\n" +
+                                        "============================================================\n\n";
+                    responseArea.append(completeBlock);
+                    
+                    // Append the actual response (properly formatted)
+                    responseArea.append(response + "\n\n");
+                    
+                } catch (InterruptedException | CancellationException e) {
+                    // Handle cancellation
+                    String cancelledBlock = "✗ REQUEST CANCELLED\n" +
+                                        "============================================================\n\n";
+                    responseArea.append(cancelledBlock);
                 } catch (ExecutionException e) {
                     Throwable cause = e.getCause();
-                    if (cause instanceof OllamaClient.OllamaTimeoutException) {
-                        responseArea.setText("Request timed out. The model may still be loading. Please try again in a few moments.");
+                    if (cause instanceof InterruptedException || 
+                        (cause.getMessage() != null && cause.getMessage().contains("cancelled"))) {
+                        String cancelledBlock = "✗ REQUEST CANCELLED\n" +
+                                            "============================================================\n\n";
+                        responseArea.append(cancelledBlock);
                     } else {
-                        responseArea.setText("Error: " + cause.getMessage());
+                        String errorBlock ="✗ ANALYSIS FAILED\n" +
+                                        "Error: " + (cause != null ? cause.getMessage() : e.getMessage()) + "\n" +
+                                        "============================================================\n\n";
+                        responseArea.append(errorBlock);
                     }
-                } catch (InterruptedException e) {
-                    responseArea.setText("Request was interrupted.");
-                    Thread.currentThread().interrupt();
-                } catch (Exception e) {
-                    responseArea.setText("Error: " + e.getMessage());
+                } finally {
+                    // Clear current request reference
+                    currentConsoleRequest = null;
+                    currentAIWorker = null;
+                    
+                    // Reset button states
+                    SwingUtilities.invokeLater(() -> {
+                        if (consoleAskButton != null) consoleAskButton.setEnabled(true);
+                        if (consoleCancelButton != null) consoleCancelButton.setEnabled(false);
+                    });
+                    
+                    // Auto-scroll to bottom
+                    SwingUtilities.invokeLater(() -> {
+                        JScrollPane scrollPane = (JScrollPane) responseArea.getParent().getParent();
+                        JScrollBar vertical = scrollPane.getVerticalScrollBar();
+                        vertical.setValue(vertical.getMaximum());
+                    });
                 }
             }
         };
         
-        worker.execute();
+        currentAIWorker.execute();
     }
 
+    private void cancelAIConsoleRequest() {
+        // Cancel the worker first
+        if (currentAIWorker != null && !currentAIWorker.isDone()) {
+            currentAIWorker.cancel(true);
+        }
+        
+        // Cancel the request
+        if (currentConsoleRequest != null && !currentConsoleRequest.isCancelled()) {
+            currentConsoleRequest.cancel();
+        }
+        
+        // Force disconnect any lingering HTTP connections
+        // (handled by OllamaClient's cancellation checks)
+        
+        // Append cancellation message if not already done
+        if (currentConsoleRequest != null && currentConsoleRequest.getStatus() != AIStatus.CANCELLED) {
+            String cancelMsg = "\n============================================================\n" +
+                            "✗ REQUEST CANCELLED BY USER\n" +
+                            "============================================================\n\n";
+            responseArea.append(cancelMsg);
+        }
+        
+        // Reset UI state
+        if (consoleAskButton != null) consoleAskButton.setEnabled(true);
+        if (consoleCancelButton != null) consoleCancelButton.setEnabled(false);
+        
+        // Clear references
+        currentConsoleRequest = null;
+        currentAIWorker = null;
+        
+        // Auto-scroll
+        SwingUtilities.invokeLater(() -> {
+            JScrollPane scrollPane = (JScrollPane) responseArea.getParent().getParent();
+            JScrollBar vertical = scrollPane.getVerticalScrollBar();
+            vertical.setValue(vertical.getMaximum());
+        });
+    }
+
+    private void clearAIResponse() {
+        // Clear the response area completely
+        responseArea.setText("Click \"Ask AI\" to start analysis with Ollama\n");
+        
+        // Optional: Add a subtle visual reset (no functional impact)
+        responseArea.setCaretPosition(0);
+    }
+
+    private JButton findAskButton() {
+        // Find the AI Console tab's button panel
+        for (java.awt.Component comp : this.getComponents()) {
+            if (comp instanceof JTabbedPane) {
+                JTabbedPane tabbedPane = (JTabbedPane) comp;
+                java.awt.Component consolePanel = tabbedPane.getComponentAt(1); // AI Console tab
+                if (consolePanel instanceof JPanel) {
+                    return findButtonInPanel((JPanel) consolePanel, "Ask AI");
+                }
+            }
+        }
+        return null;
+    }
+
+    private JButton findCancelButton() {
+        // Find the AI Console tab's button panel
+        for (java.awt.Component comp : this.getComponents()) {
+            if (comp instanceof JTabbedPane) {
+                JTabbedPane tabbedPane = (JTabbedPane) comp;
+                java.awt.Component consolePanel = tabbedPane.getComponentAt(1); // AI Console tab
+                if (consolePanel instanceof JPanel) {
+                    return findButtonInPanel((JPanel) consolePanel, "Cancel");
+                }
+            }
+        }
+        return null;
+    }
+
+    private JButton findButtonInPanel(JPanel panel, String buttonText) {
+        for (java.awt.Component comp : panel.getComponents()) {
+            if (comp instanceof JPanel) {
+                // Recursively search sub-panels
+                JButton result = findButtonInPanel((JPanel) comp, buttonText);
+                if (result != null) return result;
+            } else if (comp instanceof JButton) {
+                JButton button = (JButton) comp;
+                if (buttonText.equals(button.getText())) {
+                    return button;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Performs background version check on startup
+     */
+    private void performBackgroundVersionCheck() {
+        SwingWorker<VersionCheckResult, Void> worker = new SwingWorker<>() {
+            @Override
+            protected VersionCheckResult doInBackground() {
+                return checkForNewVersion();
+            }
+            
+            @Override
+            protected void done() {
+                try {
+                    VersionCheckResult result = get();
+                    Configuration config = Configuration.getInstance();
+                    
+                    if (result.error != null) {
+                        // Error occurred, log but don't show in UI
+                        api.logging().logToOutput("Background version check failed: " + result.error);
+                        config.setVersionCheckError(result.error);
+                        return;
+                    }
+                    
+                    // Update configuration
+                    config.setUpdateAvailable(result.updateAvailable);
+                    config.setLatestVersion(result.latestVersion);
+                    config.setLastVersionCheckTime(System.currentTimeMillis());
+                    config.setVersionCheckError(null);
+                    config.saveToFile();
+                    
+                    // Update button color
+                    SwingUtilities.invokeLater(() -> {
+                        updateReleasesButtonColor(result.updateAvailable);
+                    });
+                    
+                    // Log result
+                    if (result.updateAvailable) {
+                        api.logging().logToOutput("New version available: " + result.latestVersion);
+                    } else {
+                        api.logging().logToOutput("Already using latest version: " + result.latestVersion);
+                    }
+                    
+                } catch (Exception e) {
+                    api.logging().logToError("Error in background version check: " + e.getMessage());
+                }
+            }
+        };
+        worker.execute();
+    }
+    
     private void retryRowAI(int viewRow) {
         // Convert view index to model index for sorting compatibility
         int modelRow = findingsTable.convertRowIndexToModel(viewRow);
@@ -750,23 +1894,37 @@ public class MainTab extends JPanel implements OllamaRequestManager.StatusUpdate
         SwingUtilities.invokeLater(() -> {
             Integer row = findingIdToRowMap.get(request.getFinding().getId());
             if (row != null) {
-                // Update the AI Status column
-                tableModel.setValueAt(request.getStatus().getDisplayName(), row, COL_AI_STATUS);
-                
-                // Update progress bar
-                updateProgressBar();
-                
-                // Update button states
-                updateButtonStates();
-                
-                // If this was a completed request and the row is selected, refresh details
-                int selectedViewRow = findingsTable.getSelectedRow();
-                if (request.getStatus() == AIStatus.COMPLETED && selectedViewRow >= 0) {
-                    int selectedModelRow = findingsTable.convertRowIndexToModel(selectedViewRow);
-                    if (selectedModelRow == row) {
-                        displaySelectedFinding();
+                // Get the most recent request for this finding
+                List<OllamaRequest> requests = rowToRequestsMap.get(row);
+                if (requests != null && !requests.isEmpty()) {
+                    // Sort by creation time to get the latest
+                    OllamaRequest latest = requests.stream()
+                        .max(Comparator.comparing(OllamaRequest::getCreatedAt))
+                        .orElse(request);
+                    
+                    // Only update UI if this is the latest request
+                    if (latest.getRequestId().equals(request.getRequestId())) {
+                        tableModel.setValueAt(request.getStatus().getDisplayName(), row, COL_AI_STATUS);
+                        
+                        // If request completed, update the finding with AI analysis
+                        if (request.getStatus() == AIStatus.COMPLETED && request.getResponse() != null) {
+                            request.getFinding().setAiAnalysis(request.getResponse());
+                            request.getFinding().setAiStatus(Finding.AiAnalysisStatus.COMPLETED);
+                            
+                            // Refresh details if this row is selected
+                            int selectedViewRow = findingsTable.getSelectedRow();
+                            if (selectedViewRow >= 0) {
+                                int selectedModelRow = findingsTable.convertRowIndexToModel(selectedViewRow);
+                                if (selectedModelRow == row) {
+                                    displaySelectedFinding();
+                                }
+                            }
+                        }
                     }
                 }
+                
+                updateProgressBar();
+                updateButtonStates();
             }
         });
     }
@@ -850,6 +2008,29 @@ public class MainTab extends JPanel implements OllamaRequestManager.StatusUpdate
         // Enable/disable buttons based on selection states
         askAIButton.setEnabled(hasAskable);
         cancelButton.setEnabled(hasCancellable);
+    }
+
+    private void appendToChat(String sender, String message) {
+        SwingUtilities.invokeLater(() -> {
+            String timestamp = java.time.LocalTime.now()
+                .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"));
+            
+            String formattedMessage;
+            if ("System".equals(sender)) {
+                formattedMessage = String.format("\n[%s] 🤖 %s:\n%s\n", timestamp, sender, message);
+            } else if ("User".equals(sender)) {
+                formattedMessage = String.format("\n[%s] 👤 %s:\n%s\n", timestamp, sender, message);
+            } else {
+                formattedMessage = String.format("\n[%s] 🤖 %s:\n%s\n", timestamp, sender, message);
+            }
+            
+            responseArea.append(formattedMessage);
+            
+            // Auto-scroll to bottom
+            JScrollPane scrollPane = (JScrollPane) responseArea.getParent().getParent();
+            JScrollBar vertical = scrollPane.getVerticalScrollBar();
+            vertical.setValue(vertical.getMaximum());
+        });
     }
 
     private AIStatus getAIStatusFromDisplay(String displayName) {

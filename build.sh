@@ -111,37 +111,43 @@ echo "[5/8] Checking critical files..."
 CRITICAL_FILES=(
     # Burp extension core
     "burp/BurpExtender.java"
-    "burp/ui/MainTab.java"
+    "burp/ui/MainTab.java"                    # COMPLETELY REWRITTEN - 3 tabs, config UI
+    
+    # NEW: Configuration and Version Management
+    "models/Configuration.java"                # NEW - Persistent config with file I/O
+    "models/VersionManager.java"               # NEW - Version tracking
     
     # Core engine
-    "core/FindingCollector.java"
-    "core/StandaloneTest.java"
+    "core/FindingCollector.java"               # ENHANCED - AI filtering methods
+    "core/StandaloneTest.java"                 # ENHANCED - CLI mode
     
-    # Analyzers
+    # Analyzers - UPDATED with 3 new analyzers
     "analyzers/Analyzer.java"
-    "analyzers/ManifestAnalyzer.java"
-    "analyzers/SecretScanner.java"
+    "analyzers/ManifestAnalyzer.java"          # ENHANCED
+    "analyzers/SecretScanner.java"             # ENHANCED - SMALI, OpenAI patterns
+    "analyzers/CryptographyAnalyzer.java"      # NEW - Crypto weakness detection
+    "analyzers/EnhancedManifestAnalyzer.java"  # NEW - Advanced manifest checks
+    "analyzers/BinaryAnalyzer.java"            # NEW - Binary file analysis
     
-    # Models
-    "models/Finding.java"
+    # Models - UPDATED
+    "models/Finding.java"                      # ENHANCED - AI fields and methods
     "models/ScanResult.java"
     "models/Severity.java"
-    
-    # NEW: AI Status model
-    "models/AIStatus.java"
+    "models/AIStatus.java"                     # ENHANCED - TIMEOUT, RATE_LIMITED, CANCELLED
     
     # Rules engine
-    "rules/RuleEngine.java"
+    "rules/RuleEngine.java"                    # ENHANCED - New analyzer registrations
     "rules/RuleRegistry.java"
     
-    # Scanner
-    "scanner/FileScanner.java"
-    "scanner/FileType.java"
+    # Scanner - ENHANCED
+    "scanner/FileScanner.java"                  # ENHANCED - New file types
+    "scanner/FileType.java"                     # ENHANCED - CERTIFICATE, ASSET, etc.
     
-    # AI integration - UPDATED list
-    "ai/OllamaClient.java"
-    "ai/OllamaRequestManager.java"    # NEW
-    "ai/OllamaRequest.java"           # NEW
+    # AI integration - COMPLETELY OVERHAULED
+    "ai/OllamaClient.java"                      # ENHANCED - Cancellation, exceptions
+    "ai/OllamaRequestManager.java"               # NEW - Queue, retry, health system
+    "ai/OllamaRequest.java"                      # NEW - Request with cancellation
+    "ai/ConversationHistory.java"                # NEW - AI Console context
     
     # Utilities
     "utils/EntropyCalculator.java"

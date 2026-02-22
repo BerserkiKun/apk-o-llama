@@ -1,5 +1,5 @@
 package scanner;
-
+import models.Configuration;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -17,6 +17,10 @@ public class FileScanner {
         // Note: Images are now analyzed for embedded text/metadata
     );
     
+    private final Configuration config;
+    public FileScanner() {
+        this.config = Configuration.getInstance();  // NEW
+    }
     public Map<FileType, List<File>> scan(String directoryPath) throws IOException {
         File dir = new File(directoryPath);
         

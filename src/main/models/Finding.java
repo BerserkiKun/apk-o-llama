@@ -92,6 +92,24 @@ public class Finding {
         return aiStatus == AiAnalysisStatus.COMPLETED;
     }
 
+    // Add after existing AI-related methods (around line 80)
+    public boolean hasActiveAiRequest() {
+        return aiStatus == AiAnalysisStatus.IN_PROGRESS;
+    }
+
+    public void markAiRequestStarted() {
+        this.aiStatus = AiAnalysisStatus.IN_PROGRESS;
+    }
+
+    public void markAiRequestCompleted(String analysis) {
+        this.aiAnalysis = analysis;
+        this.aiStatus = AiAnalysisStatus.COMPLETED;
+    }
+
+    public void markAiRequestFailed() {
+        this.aiStatus = AiAnalysisStatus.FAILED;
+    }
+
     // NEW ENUM FOR AI ANALYSIS STATUS
     public enum AiAnalysisStatus {
         NOT_STARTED,

@@ -19,7 +19,8 @@ public class StandaloneTest {
         }
         
         String directory = args[0];
-        System.out.println("APK-o-Llama Standalone Analysis");
+        System.out.println("APK-o-llama Standalone Analysis");
+        System.out.println("By: BerserkiKun | https://github.com/BerserkiKun");
         System.out.println("================================\n");
         
         long startTime = System.currentTimeMillis();

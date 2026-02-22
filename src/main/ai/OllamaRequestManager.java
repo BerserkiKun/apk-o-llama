@@ -29,6 +29,11 @@ public class OllamaRequestManager {
     private SwingWorker<Void, RequestUpdate> statusWorker;
     private List<StatusUpdateListener> listeners;
     
+    private static final long HEALTH_CHECK_INTERVAL_SECONDS = 60;
+    private static final long MAX_IDLE_TIME_SECONDS = 300;
+    private Instant lastRequestTime;
+    private volatile boolean connectionHealthy;
+
     public interface StatusUpdateListener {
         void onStatusUpdate(OllamaRequest request);
         void onBatchComplete(List<OllamaRequest> completedRequests);
@@ -53,11 +58,44 @@ public class OllamaRequestManager {
         this.retryExecutor = Executors.newScheduledThreadPool(1);
         this.activeRequests = new AtomicInteger(0);
         this.listeners = new CopyOnWriteArrayList<>();
+        this.lastRequestTime = Instant.now();
+        this.connectionHealthy = true;
         
         startProcessingThread();
         startRetryMonitor();
+        startHealthCheck(); // Add health check
     }
     
+    private void startHealthCheck() {
+        retryExecutor.scheduleAtFixedRate(() -> {
+            try {
+                Instant now = Instant.now();
+                long idleSeconds = lastRequestTime.until(now, java.time.temporal.ChronoUnit.SECONDS);
+                
+                // If idle too long, verify connection
+                if (idleSeconds > MAX_IDLE_TIME_SECONDS) {
+                    boolean available = ollamaClient.isAvailable();
+                    if (!connectionHealthy && available) {
+                        // Connection recovered
+                        connectionHealthy = true;
+                        System.out.println("Ollama connection health restored");
+                    } else if (connectionHealthy && !available) {
+                        // Connection lost
+                        connectionHealthy = false;
+                        System.out.println("Ollama connection lost");
+                    }
+                }
+                
+                // Update last request time if there are active requests
+                if (activeRequests.get() > 0 || !requestQueue.isEmpty()) {
+                    lastRequestTime = Instant.now();
+                }
+            } catch (Exception e) {
+                System.err.println("Error in health check: " + e.getMessage());
+            }
+        }, HEALTH_CHECK_INTERVAL_SECONDS, HEALTH_CHECK_INTERVAL_SECONDS, TimeUnit.SECONDS);
+    }
+
     public OllamaRequest submitRequest(Finding finding, String prompt, int lineNumber) {
         OllamaRequest request = new OllamaRequest(finding, prompt, lineNumber);
         requests.put(request.getRequestId(), request);
@@ -98,11 +136,14 @@ public class OllamaRequestManager {
                         if (activeRequests.get() < MAX_CONCURRENT_REQUESTS) {
                             OllamaRequest request = requestQueue.poll(100, TimeUnit.MILLISECONDS);
                             if (request != null) {
-                                // Skip cancelled requests
-                                if (!request.isCancelled()) {
-                                    processRequest(request);
-                                } else {
+                                // Check if request is cancelled
+                                if (request.isCancelled()) {
+                                    // Clean up cancelled requests
+                                    request.markRemovedFromQueue();
                                     publishUpdate(request, false);
+                                } else {
+                                    // Process valid requests
+                                    processRequest(request);
                                 }
                             }
                         } else {
@@ -132,14 +173,82 @@ public class OllamaRequestManager {
         statusWorker.execute();
     }
     
+    private void handleRateLimit(OllamaRequest request, OllamaClient.OllamaRateLimitException e) {
+        synchronized(request) {
+            if (request.isCancelled()) {
+                return;
+            }
+            
+            request.setError(e.getMessage());
+            request.incrementRetryCount();
+            
+            if (request.shouldRetry(MAX_RETRIES)) {
+                request.setStatus(AIStatus.PENDING);
+                // Add delay before requeue for rate limits
+                retryExecutor.schedule(() -> {
+                    if (!request.isCancelled()) {
+                        requestQueue.offer(request);
+                    }
+                }, 5000, TimeUnit.MILLISECONDS);
+            } else {
+                request.setStatus(AIStatus.RATE_LIMITED);
+                publishUpdate(request, false);
+            }
+        }
+    }
+
+    private void handleServiceUnavailable(OllamaRequest request, OllamaClient.OllamaServiceUnavailableException e) {
+        synchronized(request) {
+            if (request.isCancelled()) {
+                return;
+            }
+            
+            request.setError(e.getMessage());
+            request.incrementRetryCount();
+            
+            if (request.shouldRetry(MAX_RETRIES)) {
+                request.setStatus(AIStatus.PENDING);
+                connectionHealthy = false;
+                // Longer delay for service unavailable
+                retryExecutor.schedule(() -> {
+                    if (!request.isCancelled() && ollamaClient.isAvailable()) {
+                        connectionHealthy = true;
+                        requestQueue.offer(request);
+                    } else if (!request.isCancelled()) {
+                        // Still unavailable, retry later
+                        handleServiceUnavailable(request, e);
+                    }
+                }, 10000, TimeUnit.MILLISECONDS);
+            } else {
+                request.setStatus(AIStatus.FAILED);
+                publishUpdate(request, false);
+            }
+        }
+    }
+
     private void processRequest(OllamaRequest request) {
         // Early check for cancellation
         if (request.isCancelled()) {
+            requestQueue.remove(request);
+            request.markRemovedFromQueue();
+            activeRequests.decrementAndGet();
+            publishUpdate(request, true);
             return;
         }
         
         activeRequests.incrementAndGet();
-        request.setStatus(AIStatus.IN_PROGRESS);
+        lastRequestTime = Instant.now();
+        
+        // Atomic status update
+        synchronized(request) {
+            if (request.isCancelled()) {
+                activeRequests.decrementAndGet();
+                return;
+            }
+            request.setStatus(AIStatus.IN_PROGRESS);
+            request.setProcessingStartedAt(Instant.now());
+        }
+        
         publishUpdate(request, false);
         
         executorService.submit(() -> {
@@ -160,9 +269,9 @@ public class OllamaRequestManager {
                     return;
                 }
                 
-                // Execute the request directly
+                // Execute the request with cancellation support
                 try {
-                    String response = ollamaClient.generate(request.getPrompt());
+                    String response = ollamaClient.generate(request.getPrompt(), request);
                     
                     // Check cancellation before processing response
                     if (request.isCancelled()) {
@@ -172,36 +281,34 @@ public class OllamaRequestManager {
                     if (response == null || response.trim().isEmpty()) {
                         handleRequestFailure(request, "Empty response from Ollama");
                     } else {
-                        request.setResponse(response);
-                        request.setStatus(AIStatus.COMPLETED);
+                        synchronized(request) {
+                            if (!request.isCancelled()) {
+                                request.setResponse(response);
+                                // Estimate tokens from prompt + response
+                                int promptTokens = OllamaClient.estimateTokenCount(request.getPrompt());
+                                int responseTokens = OllamaClient.estimateTokenCount(response);
+                                request.setStatus(AIStatus.COMPLETED);
+                            }
+                        }
                         publishUpdate(request, false);
                     }
+                } catch (InterruptedException e) {
+                    // Request was cancelled during processing
+                    synchronized(request) {
+                        if (!request.isCancelled()) {
+                            request.setStatus(AIStatus.FAILED);
+                            request.setError("Request interrupted");
+                        }
+                    }
+                    publishUpdate(request, false);
                 } catch (OllamaClient.OllamaTimeoutException e) {
                     if (!request.isCancelled()) {
                         handleRequestFailure(request, e.getMessage());
                     }
                 } catch (OllamaClient.OllamaRateLimitException e) {
-                    if (!request.isCancelled()) {
-                        request.setError(e.getMessage());
-                        request.incrementRetryCount();
-                        if (request.shouldRetry(MAX_RETRIES)) {
-                            request.setStatus(AIStatus.PENDING);
-                            // Add delay before requeue for rate limits
-                            try {
-                                Thread.sleep(5000);
-                            } catch (InterruptedException ie) {
-                                Thread.currentThread().interrupt();
-                            }
-                            requestQueue.offer(request);
-                        } else {
-                            request.setStatus(AIStatus.RATE_LIMITED);
-                        }
-                        publishUpdate(request, false);
-                    }
+                    handleRateLimit(request, e);
                 } catch (OllamaClient.OllamaServiceUnavailableException e) {
-                    if (!request.isCancelled()) {
-                        handleRequestFailure(request, e.getMessage());
-                    }
+                    handleServiceUnavailable(request, e);
                 } catch (Exception e) {
                     if (!request.isCancelled()) {
                         handleRequestFailure(request, e.getMessage());
@@ -214,6 +321,7 @@ public class OllamaRequestManager {
                 }
             } finally {
                 activeRequests.decrementAndGet();
+                lastRequestTime = Instant.now();
                 publishUpdate(request, true);
             }
         });
@@ -256,9 +364,23 @@ public class OllamaRequestManager {
     public boolean retryRequest(String requestId) {
         OllamaRequest request = requests.get(requestId);
         if (request != null && request.getStatus().isRetryable()) {
-            request.resetForRetry();
-            requestQueue.offer(request);
-            publishUpdate(request, false);
+            synchronized(request) {
+                // Create new request object for retry to avoid state confusion
+                OllamaRequest newRequest = new OllamaRequest(
+                    request.getFinding(), 
+                    request.getPrompt(), 
+                    request.getLineNumber()
+                );
+                
+                // Replace old request in maps
+                requests.put(newRequest.getRequestId(), newRequest);
+                requests.remove(requestId);
+                
+                // Queue new request
+                requestQueue.offer(newRequest);
+                
+                publishUpdate(newRequest, false);
+            }
             return true;
         }
         return false;
@@ -267,8 +389,24 @@ public class OllamaRequestManager {
     public boolean cancelRequest(String requestId) {
         OllamaRequest request = requests.get(requestId);
         if (request != null && request.getStatus().isCancellable()) {
+            // Cancel the request
             request.cancel();
+            
+            // Remove from queue if present
+            if (requestQueue.remove(request)) {
+                request.markRemovedFromQueue();
+            }
+            
+            // If this is the active request, we need to interrupt it
+            // The thread will check cancellation status and abort
+            
             publishUpdate(request, false);
+            
+            // Check if queue is now empty after removal
+            if (requestQueue.isEmpty() && activeRequests.get() == 0) {
+                notifyBatchComplete();
+            }
+            
             return true;
         }
         return false;
@@ -307,8 +445,13 @@ public class OllamaRequestManager {
     }
     
     private void publishUpdate(OllamaRequest request, boolean isBatchComplete) {
-        if (statusWorker != null) {
-            SwingUtilities.invokeLater(() -> notifyStatusUpdate(request));
+        if (statusWorker != null && request != null) {
+            SwingUtilities.invokeLater(() -> {
+                notifyStatusUpdate(request);
+                if (isBatchComplete) {
+                    notifyBatchComplete();
+                }
+            });
         }
     }
     

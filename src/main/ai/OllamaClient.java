@@ -59,20 +59,22 @@ public class OllamaClient {
     public Callable<String> createRequestCallable(String prompt) {
         return () -> {
             try {
-                return generateWithRetry(prompt, 0);
+                return generateWithRetry(prompt, 0, null);
             } catch (Exception e) {
                 throw e;
             }
         };
     }
     
-    private String generateWithRetry(String prompt, int attempt) throws Exception {
+    private String generateWithRetry(String prompt, int attempt, OllamaRequest request) throws Exception {
         try {
-            return generateInternal(prompt);
+            return generateInternal(prompt, request);
+        } catch (InterruptedException e) {
+            throw e;
         } catch (Exception e) {
             if (attempt < 2 && shouldRetry(e)) {
-                Thread.sleep(1000 * (attempt + 1)); // Exponential backoff
-                return generateWithRetry(prompt, attempt + 1);
+                Thread.sleep(1000 * (attempt + 1));
+                return generateWithRetry(prompt, attempt + 1, request);
             }
             throw e;
         }
@@ -97,68 +99,118 @@ public class OllamaClient {
     }
     
     public String generate(String prompt) throws Exception {
-        return generateInternal(prompt);
+        return generate(prompt, null);
     }
-    
-    private String generateInternal(String prompt) throws Exception {
+
+    private String generateInternal(String prompt, OllamaRequest request) throws Exception {
         validatePrompt(prompt);
         
         URL url = new URI(endpoint + "/api/generate").toURL();
-        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-        conn.setRequestMethod("POST");
-        conn.setRequestProperty("Content-Type", "application/json");
-        conn.setRequestProperty("Accept", "application/json");
-        conn.setDoOutput(true);
-        conn.setConnectTimeout(connectTimeout);
-        conn.setReadTimeout(readTimeout);
         
-        String jsonRequest = String.format("""
-            {
-                "model": "%s",
-                "prompt": %s,
-                "stream": false,
-                "options": {
-                    "temperature": 0.7,
-                    "num_predict": %d
+        // DECLARE ONCE at method level
+        HttpURLConnection conn = null;
+        String jsonRequest;
+        
+        try {
+            conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("POST");
+            conn.setRequestProperty("Content-Type", "application/json");
+            conn.setRequestProperty("Accept", "application/json");
+            conn.setDoOutput(true);
+            conn.setConnectTimeout(connectTimeout);
+            conn.setReadTimeout(readTimeout);
+            
+            // Store connection in request for cancellation
+            if (request != null) {
+                request.setActiveConnection(conn);
+            }
+
+            // Check if cancelled before sending
+            if (request != null && request.isCancelled()) {
+                conn.disconnect();
+                throw new InterruptedException("Request cancelled before sending");
+            }
+            
+            jsonRequest = String.format("""
+                {
+                    "model": "%s",
+                    "prompt": %s,
+                    "stream": false,
+                    "options": {
+                        "temperature": 0.7,
+                        "num_predict": %d
+                    }
+                }
+                """,
+                model,
+                escapeJson(prompt),
+                maxTokens
+            );
+
+            // Write request with cancellation check
+            if (request != null && request.isCancelled()) {
+                conn.disconnect();
+                throw new InterruptedException("Request cancelled during write");
+            }
+            
+            try (OutputStream os = conn.getOutputStream()) {
+                byte[] input = jsonRequest.getBytes(StandardCharsets.UTF_8);
+                os.write(input, 0, input.length);
+                os.flush();
+            }
+            
+            // Check cancellation before reading response
+            if (request != null && request.isCancelled()) {
+                conn.disconnect();
+                throw new InterruptedException("Request cancelled before reading response");
+            }
+            
+            int responseCode = conn.getResponseCode();
+            
+            if (responseCode == 429) {
+                throw new OllamaRateLimitException("Rate limit exceeded. Please try again later.");
+            } else if (responseCode == 503) {
+                throw new OllamaServiceUnavailableException("Service unavailable. Ollama might be busy.");
+            } else if (responseCode != 200) {
+                throw new Exception("Ollama returned status " + responseCode);
+            }
+            
+            StringBuilder response = new StringBuilder();
+            try (BufferedReader br = new BufferedReader(
+                    new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = br.readLine()) != null) {
+                    // Check cancellation during streaming
+                    if (request != null && request.isCancelled()) {
+                        // Immediately disconnect to terminate the stream
+                        conn.disconnect();
+                        throw new InterruptedException("Request cancelled during response streaming");
+                    }
+                    response.append(line);
                 }
             }
-            """,
-            model,
-            escapeJson(prompt),
-            maxTokens
-        );
-        
-        try (OutputStream os = conn.getOutputStream()) {
-            byte[] input = jsonRequest.getBytes(StandardCharsets.UTF_8);
-            os.write(input, 0, input.length);
-        }
-        
-        int responseCode = conn.getResponseCode();
-        
-        if (responseCode == 429) {
-            throw new Exception("Rate limit exceeded. Please try again later.");
-        } else if (responseCode == 503) {
-            throw new Exception("Service unavailable. Ollama might be busy.");
-        } else if (responseCode != 200) {
-            throw new Exception("Ollama returned status " + responseCode);
-        }
-        
-        StringBuilder response = new StringBuilder();
-        try (BufferedReader br = new BufferedReader(
-                new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
-            String line;
-            while ((line = br.readLine()) != null) {
-                response.append(line);
+            
+            String result = extractResponse(response.toString());
+            
+            if (result == null || result.trim().isEmpty()) {
+                throw new Exception("Empty response from Ollama");
+            }
+            
+            return result;
+        } catch (InterruptedException e) {
+            if (conn != null) {
+                conn.disconnect();
+            }
+            throw e;
+        } finally {
+            if (conn != null) {
+                conn.disconnect();
+                // Clear connection reference from request
+                if (request != null) {
+                    request.setActiveConnection(null);
+                }
             }
         }
-        
-        String result = extractResponse(response.toString());
-        
-        if (result == null || result.trim().isEmpty()) {
-            throw new Exception("Empty response from Ollama");
-        }
-        
-        return result;
     }
     
     private void validatePrompt(String prompt) throws Exception {
@@ -171,6 +223,15 @@ public class OllamaClient {
         }
     }
     
+    // New method that accepts request reference
+    public String generate(String prompt, OllamaRequest request) throws Exception {
+        try {
+            return generateWithRetry(prompt, 0, request);
+        } catch (Exception e) {
+            throw e;
+        }
+    }
+
     private String extractResponse(String json) {
         try {
             int start = json.indexOf("\"response\":\"") + 12;
@@ -234,5 +295,11 @@ public class OllamaClient {
         public OllamaTimeoutException(String message, Throwable cause) {
             super(message, cause);
         }
+    }
+    
+    public static int estimateTokenCount(String text) {
+        if (text == null || text.isEmpty()) return 0;
+        // Rough approximation: 1 token ≈ 4 characters for English text
+        return (int) Math.ceil(text.length() / 4.0);
     }
 }
