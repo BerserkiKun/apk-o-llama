@@ -1,8 +1,8 @@
-# APK-o-Llama: AI-Powered APK Security Analysis for Burp Suite
-
 [![Burp Suite Extension](https://img.shields.io/badge/Burp%20Suite-Extension-orange)](https://portswigger.net/burp)
 [![Version](https://img.shields.io/badge/Version-1.1.0-blue)](https://github.com/berserkikun/apk-o-llama/releases)
 [![Ollama](https://img.shields.io/badge/Ollama-Required-yellow)](https://ollama.com)
+
+# APK-o-Llama: AI-Powered APK Security Analysis for Burp Suite
 
 ## 📋 Table of Contents
 - [Overview](#overview)
