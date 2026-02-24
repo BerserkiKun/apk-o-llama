@@ -1,8 +1,8 @@
 package models;
 
 public class VersionManager {
-    private static final String EXTENSION_NAME = "APK-o-llama v1.1.0";
-    private static String currentVersion = "1.1.0";
+    private static final String EXTENSION_NAME = "APK-o-llama v1.2.0";
+    private static String currentVersion = "1.2.0";
     
     static {
         extractVersion();

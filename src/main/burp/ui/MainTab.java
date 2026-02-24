@@ -25,7 +25,12 @@ import java.util.*;
 import java.util.List;
 import ai.ConversationHistory;
 import javax.swing.table.TableRowSorter;
+import java.io.FileWriter;
+import java.io.PrintWriter;
+import java.time.format.DateTimeFormatter;
+import java.nio.charset.StandardCharsets;
 
+import javax.swing.filechooser.FileNameExtensionFilter;
 import models.Severity;  
 import java.util.concurrent.CancellationException;
 import java.net.URL;
@@ -242,6 +247,12 @@ public class MainTab extends JPanel implements OllamaRequestManager.StatusUpdate
         cancelButton.setEnabled(false);
         buttonPanel.add(cancelButton);
         
+        // NEW: Export button - always enabled
+        JButton exportButton = new JButton("Export");
+        exportButton.addActionListener(e -> exportFindings());
+        exportButton.setEnabled(true); // Always enabled as per requirement
+        buttonPanel.add(exportButton);
+
         JPanel findingsContainer = new JPanel(new BorderLayout());
         findingsContainer.add(findingsPanel, BorderLayout.CENTER);
         findingsContainer.add(buttonPanel, BorderLayout.SOUTH);
@@ -2008,6 +2019,399 @@ public class MainTab extends JPanel implements OllamaRequestManager.StatusUpdate
         // Enable/disable buttons based on selection states
         askAIButton.setEnabled(hasAskable);
         cancelButton.setEnabled(hasCancellable);
+    }
+
+    /**
+     * Exports findings to a CSV file based on selection state
+     */
+    private void exportFindings() {
+        // Check if there are any findings at all
+        if (tableModel.getRowCount() == 0) {
+            JOptionPane.showMessageDialog(
+                this,
+                "No data available to export.",
+                "Export Warning",
+                JOptionPane.WARNING_MESSAGE
+            );
+            return;
+        }
+        
+        // Check if any rows are selected
+        int[] selectedRows = findingsTable.getSelectedRows();
+        if (selectedRows.length == 0) {
+            JOptionPane.showMessageDialog(
+                this,
+                "No row selected.",
+                "Export Warning",
+                JOptionPane.WARNING_MESSAGE
+            );
+            return;
+        }
+        
+        // Show format selection dialog
+        String[] formats = {"CSV", "HTML"};
+        int formatChoice = JOptionPane.showOptionDialog(
+            this,
+            "Select Export Format:",
+            "Export Format",
+            JOptionPane.DEFAULT_OPTION,
+            JOptionPane.QUESTION_MESSAGE,
+            null,
+            formats,
+            formats[0]
+        );
+        
+        if (formatChoice == JOptionPane.CLOSED_OPTION) {
+            return; // User cancelled
+        }
+        
+        String selectedFormat = formats[formatChoice];
+        String projectName = "";
+
+        // If HTML selected, ask for project name
+        if ("HTML".equals(selectedFormat)) {
+            // Suggest default from directory name if available
+            String defaultName = "";
+            String directory = directoryField.getText().trim();
+            if (!directory.isEmpty()) {
+                File dir = new File(directory);
+                defaultName = dir.getName();
+            }
+            
+            Object input = JOptionPane.showInputDialog(
+                this,
+                "Enter project/report name:",
+                "Report Title",
+                JOptionPane.QUESTION_MESSAGE,
+                null,
+                null,
+                defaultName
+            );
+
+            if (input == null) {
+                return; // User cancelled
+            }
+            projectName = input.toString().trim();
+            
+            if (projectName == null) {
+                return; // User cancelled
+            }
+            
+            projectName = projectName.trim();
+        }
+        // Configure file chooser based on format
+        JFileChooser fileChooser = new JFileChooser();
+        fileChooser.setDialogTitle("Export Findings as " + selectedFormat);
+        
+        String extension;
+        String description;
+        if ("CSV".equals(selectedFormat)) {
+            extension = "csv";
+            description = "CSV files (*.csv)";
+            fileChooser.setFileFilter(new FileNameExtensionFilter(description, extension));
+        } else {
+            extension = "html";
+            description = "HTML files (*.html)";
+            fileChooser.setFileFilter(new FileNameExtensionFilter(description, extension));
+        }
+        
+        // Suggest a default filename with timestamp
+        String timestamp = LocalTime.now().format(DateTimeFormatter.ofPattern("HHmmss"));
+        fileChooser.setSelectedFile(new File("apk-ollama-findings-" + timestamp + "." + extension));
+        
+        int userSelection = fileChooser.showSaveDialog(this);
+        
+        if (userSelection == JFileChooser.APPROVE_OPTION) {
+            File selectedFile = fileChooser.getSelectedFile();
+            
+            // Ensure correct extension
+            final File fileToSave;
+            if (!selectedFile.getName().toLowerCase().endsWith("." + extension)) {
+                fileToSave = new File(selectedFile.getAbsolutePath() + "." + extension);
+            } else {
+                fileToSave = selectedFile;
+            }
+            
+            // Store selected rows for background thread
+            final int[] rowsToExport = selectedRows.clone();
+            final String format = selectedFormat;
+            final String reportName = projectName;
+
+            // Perform export in background to avoid UI freeze
+            SwingWorker<Void, Void> exportWorker = new SwingWorker<>() {
+                @Override
+                protected Void doInBackground() throws Exception {
+                    if ("CSV".equals(format)) {
+                        exportSelectedRowsToCsv(fileToSave, rowsToExport);
+                    } else {
+                        exportSelectedRowsToHtml(fileToSave, rowsToExport, reportName);
+                    }
+                    return null;
+                }
+                
+                @Override
+                protected void done() {
+                    try {
+                        get(); // Check for exceptions
+                        JOptionPane.showMessageDialog(
+                            MainTab.this,
+                            "Exported " + rowsToExport.length + " finding(s) successfully to:\n" + fileToSave.getAbsolutePath(),
+                            "Export Complete",
+                            JOptionPane.INFORMATION_MESSAGE
+                        );
+                        api.logging().logToOutput("Exported " + rowsToExport.length + " findings to: " + fileToSave.getAbsolutePath());
+                    } catch (Exception e) {
+                        JOptionPane.showMessageDialog(
+                            MainTab.this,
+                            "Error exporting findings: " + e.getMessage(),
+                            "Export Error",
+                            JOptionPane.ERROR_MESSAGE
+                        );
+                        api.logging().logToError("Export failed: " + e.getMessage());
+                    }
+                }
+            };
+            
+            exportWorker.execute();
+        }
+    }
+
+    /**
+     * Writes only selected findings to CSV file
+     */
+    private void exportSelectedRowsToCsv(File file, int[] selectedViewRows) throws Exception {
+        try (PrintWriter writer = new PrintWriter(new FileWriter(file))) {
+            // Write header
+            writer.println("Severity,Title,Category,File,Line Number,Confidence,AI Status,Description,Evidence,AI Analysis");
+            
+            // Write data rows for selected findings only
+            for (int viewRow : selectedViewRows) {
+                int modelRow = findingsTable.convertRowIndexToModel(viewRow);
+                Finding finding = currentFindings.getAllFindings().get(modelRow);
+                
+                StringBuilder line = new StringBuilder();
+                
+                // Severity
+                line.append(escapeCsv(finding.getSeverity().toString())).append(",");
+                
+                // Title
+                line.append(escapeCsv(finding.getTitle())).append(",");
+                
+                // Category
+                line.append(escapeCsv(finding.getCategory())).append(",");
+                
+                // File (just filename, not full path)
+                String fileName = new File(finding.getFilePath()).getName();
+                line.append(escapeCsv(fileName)).append(",");
+                
+                // Line Number
+                line.append(finding.getLineNumber()).append(",");
+                
+                // Confidence (as percentage)
+                line.append(String.format("%.0f%%", finding.getConfidence() * 100)).append(",");
+                
+                // AI Status - get from table
+                String aiStatus = (String) tableModel.getValueAt(modelRow, COL_AI_STATUS);
+                line.append(escapeCsv(aiStatus)).append(",");
+                
+                // Description
+                line.append(escapeCsv(finding.getDescription())).append(",");
+                
+                // Evidence
+                line.append(escapeCsv(finding.getEvidence())).append(",");
+                
+                // AI Analysis (if available)
+                String aiAnalysis = finding.getAiAnalysis();
+                if (aiAnalysis == null || aiAnalysis.isEmpty()) {
+                    aiAnalysis = "No AI analysis available";
+                }
+                line.append(escapeCsv(aiAnalysis));
+                
+                writer.println(line.toString());
+            }
+        }
+    }
+
+    /**
+     * Exports selected findings to HTML report format
+     */
+    private void exportSelectedRowsToHtml(File file, int[] selectedViewRows, String projectName) throws Exception {
+        try (PrintWriter writer = new PrintWriter(new FileWriter(file, StandardCharsets.UTF_8))) {
+            // Collect selected findings
+            List<Finding> selectedFindings = new ArrayList<>();
+            for (int viewRow : selectedViewRows) {
+                int modelRow = findingsTable.convertRowIndexToModel(viewRow);
+                selectedFindings.add(currentFindings.getAllFindings().get(modelRow));
+            }
+            
+            // Calculate severity counts
+            Map<Severity, Integer> severityCounts = new EnumMap<>(Severity.class);
+            for (Severity severity : Severity.values()) {
+                severityCounts.put(severity, 0);
+            }
+            for (Finding finding : selectedFindings) {
+                severityCounts.merge(finding.getSeverity(), 1, Integer::sum);
+            }
+            
+            // Generate timestamp
+            String timestamp = java.time.LocalDateTime.now()
+                .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+            
+            // Generate HTML
+            writer.println("<!DOCTYPE html>");
+            writer.println("<html lang=\"en\">");
+            writer.println("<head>");
+            writer.println("    <meta charset=\"UTF-8\">");
+            writer.println("    <title>APK-o-llama Findings Report</title>");
+            writer.println("    <style>");
+            writer.println("        body { font-family: Arial, sans-serif; margin: 20px; background-color: #ffffff; }");
+            writer.println("        h1 { color: #333; border-bottom: 2px solid #666; padding-bottom: 10px; }");
+            writer.println("        h2 { color: #444; margin-top: 30px; }");
+            writer.println("        h3 { color: #555; margin: 10px 0; }");
+            writer.println("        .summary { background-color: #f5f5f5; padding: 15px; border-radius: 5px; margin: 20px 0; }");
+            writer.println("        .summary-item { margin: 5px 0; }");
+            writer.println("        .finding { border: 1px solid #ddd; margin: 15px 0; padding: 15px; border-radius: 5px; }");
+            writer.println("        .finding-header { display: flex; align-items: center; margin-bottom: 10px; }");
+            writer.println("        .severity-badge { padding: 3px 10px; border-radius: 3px; font-weight: bold; margin-right: 10px; }");
+            writer.println("        .severity-critical { background-color: #ff4444; color: white; }");
+            writer.println("        .severity-high { background-color: #ff8800; color: white; }");
+            writer.println("        .severity-medium { background-color: #ffcc00; color: black; }");
+            writer.println("        .severity-low { background-color: #33b5e5; color: white; }");
+            writer.println("        .severity-info { background-color: #aaaaaa; color: white; }");
+            writer.println("        .finding-title { font-size: 18px; font-weight: bold; }");
+            writer.println("        .finding-meta { color: #666; font-size: 14px; margin: 5px 0; }");
+            writer.println("        .finding-section { margin: 15px 0 0 0; }");
+            writer.println("        .section-label { font-weight: bold; color: #444; margin-bottom: 5px; }");
+            writer.println("        .section-content { background-color: #f9f9f9; padding: 10px; border-left: 3px solid #33b5e5; white-space: pre-wrap; }");
+            writer.println("        .evidence { font-family: monospace; background-color: #f0f0f0; }");
+            writer.println("        .footer { margin-top: 30px; color: #888; font-size: 12px; text-align: center; }");
+            writer.println("    </style>");
+            writer.println("</head>");
+            writer.println("<body>");
+            
+            // Header
+            String reportTitle = projectName == null || projectName.isEmpty() ? 
+                "APK-o-llama Findings Report" : 
+                projectName + " Vulnerability Report";
+
+            writer.println("    <div style=\"text-align: center;\">");
+            writer.println("        <h1>" + escapeHtml(reportTitle) + "</h1>");
+            writer.println("        <p>Generated: " + timestamp + "</p>");
+            writer.println("    </div>");
+            
+            // Summary section
+            writer.println("    <div class=\"summary\">");
+            writer.println("        <h2>Summary</h2>");
+            writer.println("        <div class=\"summary-item\">Total Selected Findings: " + selectedFindings.size() + "</div>");
+            writer.println("        <div class=\"summary-item\">Severity Breakdown:</div>");
+            writer.println("        <ul style=\"list-style-type: none; padding-left: 0;\">");
+            for (Severity severity : Severity.values()) {
+                int count = severityCounts.get(severity);
+                if (count > 0) {
+                    String severityClass = getSeverityCssClass(severity);
+                    writer.println("            <li style=\"margin-bottom: 8px;\"><span class=\"severity-badge " + severityClass + "\">" + 
+                        severity.getDisplayName() + "</span>: " + count + "</li>");
+                }
+            }
+            writer.println("        </ul>");
+            writer.println("    </div>");
+            
+            // Detailed findings
+            writer.println("    <h2>Detailed Findings</h2>");
+            
+            for (Finding finding : selectedFindings) {
+                String severityClass = getSeverityCssClass(finding.getSeverity());
+                String fileName = new File(finding.getFilePath()).getName();
+                
+                writer.println("    <div class=\"finding\">");
+                writer.println("        <div class=\"finding-header\">");
+                writer.println("            <span class=\"severity-badge " + severityClass + "\">" + 
+                    finding.getSeverity().getDisplayName() + "</span>");
+                writer.println("            <span class=\"finding-title\">" + escapeHtml(finding.getTitle()) + "</span>");
+                writer.println("        </div>");
+                writer.println("        <div class=\"finding-meta\">");
+                writer.println("            Category: " + escapeHtml(finding.getCategory()) + "<br>");
+                writer.println("            File: " + escapeHtml(fileName) + "<br>");
+                if (finding.getLineNumber() > 0) {
+                    writer.println("            Line: " + finding.getLineNumber() + "<br>");
+                }
+                writer.println("            Confidence: " + String.format("%.0f%%", finding.getConfidence() * 100) + "<br>");
+                writer.println("        </div>");
+                
+                writer.println("        <div class=\"finding-section\">");
+                writer.println("            <div class=\"section-label\">Description:</div>");
+                writer.println("            <div class=\"section-content\">" + escapeHtml(finding.getDescription()) + "</div>");
+                writer.println("        </div>");
+                
+                writer.println("        <div class=\"finding-section\">");
+                writer.println("            <div class=\"section-label\">Evidence:</div>");
+                writer.println("            <div class=\"section-content evidence\">" + escapeHtml(finding.getEvidence()) + "</div>");
+                writer.println("        </div>");
+                
+                // Recommendation (placeholder if not available)
+                writer.println("        <div class=\"finding-section\">");
+                writer.println("            <div class=\"section-label\">Recommendation:</div>");
+                writer.println("            <div class=\"section-content\">Review this finding in context. " +
+                    "Consider implementing proper security controls based on the finding type.</div>");
+                writer.println("        </div>");
+                
+                writer.println("    </div>");
+            }
+            
+            // Footer
+            writer.println("    <div class=\"footer\">");
+            writer.println("        Generated by APK-o-llama v" + VersionManager.getCurrentVersion() + "<br>");
+            writer.println("        Author: BerserkiKun | GitHub: https://github.com/BerserkiKun/apk-o-llama");
+            writer.println("    </div>");
+            
+            writer.println("</body>");
+            writer.println("</html>");
+        }
+    }
+
+    /**
+     * Returns CSS class for severity badge
+     */
+    private String getSeverityCssClass(Severity severity) {
+        switch (severity) {
+            case CRITICAL: return "severity-critical";
+            case HIGH: return "severity-high";
+            case MEDIUM: return "severity-medium";
+            case LOW: return "severity-low";
+            case INFO: return "severity-info";
+            default: return "severity-info";
+        }
+    }
+
+    /**
+     * Escapes HTML special characters
+     */
+    private String escapeHtml(String text) {
+        if (text == null) return "";
+        return text.replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace("\"", "&quot;")
+                .replace("'", "&#39;");
+    }
+    
+    /**
+     * Escape special characters for CSV format
+     */
+    private String escapeCsv(String value) {
+        if (value == null) {
+            return "";
+        }
+        
+        // Replace double quotes with double double quotes
+        String escaped = value.replace("\"", "\"\"");
+        
+        // Wrap in double quotes if contains comma, newline, or double quote
+        if (escaped.contains(",") || escaped.contains("\n") || escaped.contains("\"")) {
+            return "\"" + escaped + "\"";
+        }
+        
+        return escaped;
     }
 
     private void appendToChat(String sender, String message) {
