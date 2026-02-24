@@ -20,6 +20,7 @@
   - [Method 3: Standalone CLI Mode](#method-3-standalone-cli-mode)
 - [Key Features](#key-features)
   - [Security & Privacy](#security--privacy)
+  - [Export Findings](#export-findings)
   - [Analysis Capabilities](#analysis-capabilities)
   - [AI-Powered Reporting](#ai-powered-reporting)
   - [Performance Features](#performance-features)
@@ -308,6 +309,14 @@ For users who want to run APK-o-Llama from the command line without Burp Suite, 
 - ⚠️ **Configuration persistence** with local file storage
 - ❤️ **Request cancellation**: to prevent data leaks from stuck processes
 
+### Export Findings
+- 📤 **Export findings to CSV**: Open in Excel/Google Sheets for data analysis
+- 📊 **Generate professional HTML reports**: Self-contained reports perfect for sharing
+- 🎯 **Selective export**: Export only the findings you select (multi-select supported)
+- 🎨 **Color-coded severity badges**: Visual indicators in HTML reports with summary breakdown
+- 📝 **Custom report titles**: Name your HTML report (defaults to project directory name)
+- ⚡ **Background processing**: No UI freezing, exports run smoothly
+
 ### Analysis Capabilities
 - 📦 **APK Directory Scanning**: Process decompiled APK folder structures
 - 🔍 **Multi-Format Support**: Java, Kotlin, Smali, XML, binary files
@@ -440,12 +449,10 @@ For users who want to run APK-o-Llama from the command line without Burp Suite, 
 | **Cancelled** | Gray | User cancelled |
 
 ## Screenshots
-<img width="1470" height="921" alt="Screenshot 2026-02-21 at 8 53 31ΓÇ»PM" src="https://github.com/user-attachments/assets/dad15a17-0219-47b6-b943-be98595d0bf5" />
-<img width="1470" height="924" alt="Screenshot 2026-02-21 at 9 28 35ΓÇ»PM" src="https://github.com/user-attachments/assets/e8a3252e-b5fd-4d97-a434-8e29610bd909" />
-<img width="1470" height="925" alt="Screenshot 2026-02-21 at 8 54 04ΓÇ»PM" src="https://github.com/user-attachments/assets/16459a6e-6af9-480e-818d-006c9da631a3" />
-<img width="1470" height="888" alt="Screenshot 2026-02-21 at 9 07 12ΓÇ»PM" src="https://github.com/user-attachments/assets/cf945d69-d25a-47f2-a5c4-df4d7143574b" />
-<img width="1470" height="887" alt="Screenshot 2026-02-21 at 9 07 42ΓÇ»PM" src="https://github.com/user-attachments/assets/385a317e-8c39-48ae-b1ee-7b28d52d3d43" />
-<img width="1470" height="888" alt="Screenshot 2026-02-21 at 9 08 06ΓÇ»PM" src="https://github.com/user-attachments/assets/8344ef8f-abd0-4b0a-b94e-ddc3a80e8fbd" />
+| <img width="1470" height="921" alt="Screenshot 2026-02-21 at 8 53 31ΓÇ»PM" src="https://github.com/user-attachments/assets/dad15a17-0219-47b6-b943-be98595d0bf5" /> | <img width="1470" height="924" alt="Screenshot 2026-02-21 at 9 28 35ΓÇ»PM" src="https://github.com/user-attachments/assets/e8a3252e-b5fd-4d97-a434-8e29610bd909" /> | <img width="1470" height="925" alt="Screenshot 2026-02-21 at 8 54 04ΓÇ»PM" src="https://github.com/user-attachments/assets/16459a6e-6af9-480e-818d-006c9da631a3" /> |
+|<img width="1470" height="888" alt="Screenshot 2026-02-21 at 9 07 12ΓÇ»PM" src="https://github.com/user-attachments/assets/cf945d69-d25a-47f2-a5c4-df4d7143574b" /> | <img width="1470" height="887" alt="Screenshot 2026-02-21 at 9 07 42ΓÇ»PM" src="https://github.com/user-attachments/assets/385a317e-8c39-48ae-b1ee-7b28d52d3d43" /> | <img width="1470" height="888" alt="Screenshot 2026-02-21 at 9 08 06ΓÇ»PM" src="https://github.com/user-attachments/assets/8344ef8f-abd0-4b0a-b94e-ddc3a80e8fbd" /> |
+| <img width="1470" height="924" alt="Screenshot 2026-02-24 at 5 28 02ΓÇ»PM" src="https://github.com/user-attachments/assets/f45c4082-30d9-4a30-bc8b-af611437efab" /> | <img width="1470" height="837" alt="Screenshot 2026-02-24 at 5 28 50ΓÇ»PM" src="https://github.com/user-attachments/assets/c7264aad-c3b3-4664-a7e0-9a945c160936" /> | <img width="1470" height="835" alt="Screenshot 2026-02-24 at 5 29 21ΓÇ»PM" src="https://github.com/user-attachments/assets/606a8aa2-32dd-4fa5-a13d-299d0f81d0d9" /> |
+
 
 
 ## Support Development
